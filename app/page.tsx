@@ -1,65 +1,245 @@
-import Image from "next/image";
+'use client';
+
+import React, { useState, useEffect } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import Navbar from '@/components/Navbar';
+import Footer from '@/components/Footer';
+import AuthModal from '@/components/AuthModal';
+import TermsModal from '@/components/TermsModal';
+import CookieBanner from '@/components/CookieBanner';
+import { Shield, Sparkles, MessageSquare, Globe, Smartphone, Zap } from 'lucide-react';
 
 export default function Home() {
+  const router = useRouter();
+  const [onlineCount, setOnlineCount] = useState(14280);
+  const [displayCount, setDisplayCount] = useState(14285);
+  const [user, setUser] = useState<{ username: string } | null>(null);
+  const [authOpen, setAuthOpen] = useState(false);
+  const [showTerms, setShowTerms] = useState(false);
+  const [pendingRedirect, setPendingRedirect] = useState<string | null>(null);
+  const serverUrl = process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:4000';
+
+  useEffect(() => {
+    // Check if terms accepted
+    const accepted = localStorage.getItem('ghostchat_terms_accepted') === 'true';
+    if (!accepted) {
+      setShowTerms(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    // Check logged in user
+    const storedUser = localStorage.getItem('ghostchat_user');
+    if (storedUser) setUser(JSON.parse(storedUser));
+
+    // Fetch active counts and start 10s poll
+    const fetchOnlineCount = () => {
+      fetch(`${serverUrl}/health`)
+        .then((res) => res.json())
+        .then((data) => {
+          const actualOnline = data.online || 0;
+          setOnlineCount(14280 + actualOnline);
+        })
+        .catch(() => {
+          setOnlineCount(14285);
+        });
+    };
+
+    fetchOnlineCount();
+    const intervalId = setInterval(fetchOnlineCount, 10000);
+
+    return () => clearInterval(intervalId);
+  }, [serverUrl]);
+
+  // Sync displayCount to base onlineCount when base updates
+  useEffect(() => {
+    setDisplayCount(onlineCount);
+  }, [onlineCount]);
+
+  // Extremely fast dynamic counter ticker effect
+  useEffect(() => {
+    const tickerInterval = setInterval(() => {
+      const change = Math.floor(Math.random() * 5) - 2;
+      setDisplayCount((prev) => {
+        const next = prev + change;
+        if (Math.abs(next - onlineCount) > 10) {
+          return onlineCount;
+        }
+        return next;
+      });
+    }, 1500);
+
+    return () => clearInterval(tickerInterval);
+  }, [onlineCount]);
+
+  const handleChatStart = (targetPath: string) => {
+    if (user) {
+      router.push(targetPath);
+    } else {
+      setPendingRedirect(targetPath);
+      setAuthOpen(true);
+    }
+  };
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
+    <div className="flex min-h-screen flex-col bg-white">
+      <Navbar
+        onlineCount={displayCount}
+        user={user}
+        onAuthClick={() => setAuthOpen(true)}
+        onLogout={() => {
+          localStorage.removeItem('ghostchat_token');
+          localStorage.removeItem('ghostchat_user');
+          setUser(null);
+        }}
+      />
+
+      {/* Hero Section */}
+      <main className="flex-grow">
+        <section className="relative flex flex-col items-center justify-center py-20 px-4 text-center sm:px-6 lg:px-8">
+          <div className="max-w-3xl space-y-6">
+            <h1 className="text-5xl font-extrabold tracking-tight text-brand-black sm:text-6xl lg:text-7xl leading-tight">
+              Meet New People <br className="hidden sm:inline" />
+              <span className="underline decoration-brand-gray-mid decoration-wavy">Instantly</span>
+            </h1>
+            <p className="text-base sm:text-lg text-brand-black/60 max-w-xl mx-auto leading-relaxed">
+              Start anonymous text and video conversations with strangers around the world. No registration required.
+            </p>
+
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-6">
+              <button
+                onClick={() => handleChatStart('/chat?mode=video')}
+                className="w-full sm:w-auto rounded-2xl bg-brand-black px-8 py-4 text-sm font-bold uppercase tracking-wider text-white transition-all hover:bg-brand-black/95 active:scale-95 text-center shadow-md border border-brand-black cursor-pointer font-bold"
+              >
+                Start Video Chat
+              </button>
+              <button
+                onClick={() => handleChatStart('/chat?mode=text')}
+                className="w-full sm:w-auto rounded-2xl border border-brand-black bg-white px-8 py-4 text-sm font-bold uppercase tracking-wider text-brand-black transition-all hover:bg-brand-gray-light active:scale-95 text-center cursor-pointer font-bold"
+              >
+                Start Text Chat
+              </button>
+            </div>
+          </div>
+        </section>
+
+        {/* Features Section */}
+        <section className="bg-brand-gray-light/30 border-t border-brand-gray-mid/30 py-20 px-4 sm:px-6 lg:px-8">
+          <div className="mx-auto max-w-7xl space-y-12">
+            <div className="text-center space-y-3">
+              <h2 className="text-3xl font-extrabold tracking-tight text-brand-black sm:text-4xl">
+                Why Choose GhostChat?
+              </h2>
+              <p className="text-sm text-brand-black/60 max-w-md mx-auto">
+                Spontaneous pairing matched with modern privacy standards and safety filters.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-3">
+              {/* Feature 1 */}
+              <div className="flex gap-4 rounded-2xl border border-brand-gray-mid/45 p-6 bg-white shadow-2xs">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-gray-light border border-brand-gray-mid/30">
+                  <MessageSquare size={20} className="text-brand-black" />
+                </div>
+                <div className="space-y-1.5">
+                  <h3 className="font-bold text-brand-black">Anonymous Chat</h3>
+                  <p className="text-xs text-brand-black/55 leading-relaxed">
+                    No sign-ups or profile setup required. Connect freely and stay completely anonymous.
+                  </p>
+                </div>
+              </div>
+
+              {/* Feature 2 */}
+              <div className="flex gap-4 rounded-2xl border border-brand-gray-mid/45 p-6 bg-white shadow-2xs">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-gray-light border border-brand-gray-mid/30">
+                  <Sparkles size={20} className="text-brand-black" />
+                </div>
+                <div className="space-y-1.5">
+                  <h3 className="font-bold text-brand-black">Instant Matching</h3>
+                  <p className="text-xs text-brand-black/55 leading-relaxed">
+                    Zero waiting queues. Instantly pair with active chat users in text or video mode.
+                  </p>
+                </div>
+              </div>
+
+              {/* Feature 3 */}
+              <div className="flex gap-4 rounded-2xl border border-brand-gray-mid/45 p-6 bg-white shadow-2xs">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-gray-light border border-brand-gray-mid/30">
+                  <Shield size={20} className="text-brand-black" />
+                </div>
+                <div className="space-y-1.5">
+                  <h3 className="font-bold text-brand-black">Safe Environment</h3>
+                  <p className="text-xs text-brand-black/55 leading-relaxed">
+                    Automated anti-abuse monitoring, live user reports, and matching block limits.
+                  </p>
+                </div>
+              </div>
+
+              {/* Feature 4 */}
+              <div className="flex gap-4 rounded-2xl border border-brand-gray-mid/45 p-6 bg-white shadow-2xs">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-gray-light border border-brand-gray-mid/30">
+                  <Globe size={20} className="text-brand-black" />
+                </div>
+                <div className="space-y-1.5">
+                  <h3 className="font-bold text-brand-black">Global Connections</h3>
+                  <p className="text-xs text-brand-black/55 leading-relaxed">
+                    Preferences let you specify matching criteria including Country and Language.
+                  </p>
+                </div>
+              </div>
+
+              {/* Feature 5 */}
+              <div className="flex gap-4 rounded-2xl border border-brand-gray-mid/45 p-6 bg-white shadow-2xs">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-gray-light border border-brand-gray-mid/30">
+                  <Smartphone size={20} className="text-brand-black" />
+                </div>
+                <div className="space-y-1.5">
+                  <h3 className="font-bold text-brand-black">Mobile Friendly</h3>
+                  <p className="text-xs text-brand-black/55 leading-relaxed">
+                    Designed from the ground up for tablets, mobile screens, and desktop viewports.
+                  </p>
+                </div>
+              </div>
+
+              {/* Feature 6 */}
+              <div className="flex gap-4 rounded-2xl border border-brand-gray-mid/45 p-6 bg-white shadow-2xs">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-gray-light border border-brand-gray-mid/30">
+                  <Zap size={20} className="text-brand-black" />
+                </div>
+                <div className="space-y-1.5">
+                  <h3 className="font-bold text-brand-black">Fast & Secure</h3>
+                  <p className="text-xs text-brand-black/55 leading-relaxed">
+                    WebRTC provides direct peer connection streams, keeping latency at a minimum.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
       </main>
+
+      <Footer />
+
+      <CookieBanner />
+
+      <AuthModal
+        isOpen={authOpen}
+        onClose={() => setAuthOpen(false)}
+        onAuthSuccess={(u) => {
+          setUser(u);
+          if (pendingRedirect) {
+            router.push(pendingRedirect);
+            setPendingRedirect(null);
+          }
+        }}
+        serverUrl={serverUrl}
+      />
+
+      <TermsModal
+        isOpen={showTerms}
+        onAccept={() => setShowTerms(false)}
+      />
     </div>
   );
 }
