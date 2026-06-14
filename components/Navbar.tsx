@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 import Link from 'next/link';
 import Logo from './Logo';
 import { User, Users } from 'lucide-react';
+import AnonymousModal from './AnonymousModal';
 
 interface NavbarProps {
   onlineCount: number;
@@ -9,7 +10,7 @@ interface NavbarProps {
   onAuthClick: () => void;
   onLogout: () => void;
   showChatLink?: boolean;
-  onAnonymousChatClick?: () => void;
+  onAuthSuccess?: (user: { username: string }) => void;
 }
 
 export default function Navbar({
@@ -18,8 +19,11 @@ export default function Navbar({
   onAuthClick,
   onLogout,
   showChatLink = true,
-  onAnonymousChatClick
+  onAuthSuccess
 }: NavbarProps) {
+  const [anonOpen, setAnonOpen] = useState(false);
+  const serverUrl = process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:4000';
+
   return (
     <header className="sticky top-0 z-40 w-full border-b border-brand-gray-mid/40 bg-white/80 backdrop-blur-md">
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
@@ -35,10 +39,10 @@ export default function Navbar({
           </div>
 
           {/* Anonymous Chat Button */}
-          {onAnonymousChatClick && !user && (
+          {!user && (
             <button
-              onClick={onAnonymousChatClick}
-              className="flex items-center gap-1 rounded-full border border-brand-black/25 bg-white px-3 sm:px-4 py-1.5 text-xs font-bold uppercase tracking-wider text-brand-black transition-all hover:bg-brand-gray-light active:scale-95 cursor-pointer"
+              onClick={() => setAnonOpen(true)}
+              className="flex items-center gap-1 rounded-full border border-brand-black/25 bg-white px-3 sm:px-4 py-1.5 text-xs font-bold uppercase tracking-wider text-brand-black transition-all hover:bg-brand-gray-light active:scale-95 cursor-pointer font-bold"
             >
               Anonymous Chat
             </button>
@@ -55,7 +59,7 @@ export default function Navbar({
               </div>
               <button
                 onClick={onLogout}
-                className="rounded-full border border-brand-black px-3 sm:px-4 py-1.5 text-xs font-bold uppercase tracking-wider text-brand-black transition-all hover:bg-brand-black hover:text-white cursor-pointer"
+                className="rounded-full border border-brand-black px-3 sm:px-4 py-1.5 text-xs font-bold uppercase tracking-wider text-brand-black transition-all hover:bg-brand-black hover:text-white cursor-pointer font-bold"
               >
                 Logout
               </button>
@@ -63,7 +67,7 @@ export default function Navbar({
           ) : (
             <button
               onClick={onAuthClick}
-              className="flex items-center gap-1.5 rounded-full bg-brand-black px-3 sm:px-4 py-1.5 text-xs font-bold uppercase tracking-wider text-white transition-all hover:bg-brand-black/90 active:scale-95 cursor-pointer"
+              className="flex items-center gap-1.5 rounded-full bg-brand-black px-3 sm:px-4 py-1.5 text-xs font-bold uppercase tracking-wider text-white transition-all hover:bg-brand-black/90 active:scale-95 cursor-pointer font-bold"
             >
               <User size={13} />
               Login / Sign Up
@@ -71,6 +75,18 @@ export default function Navbar({
           )}
         </div>
       </div>
+
+      <AnonymousModal
+        isOpen={anonOpen}
+        onClose={() => setAnonOpen(false)}
+        onSuccess={(u) => {
+          if (onAuthSuccess) {
+            onAuthSuccess(u);
+          }
+        }}
+        serverUrl={serverUrl}
+      />
     </header>
   );
 }
+

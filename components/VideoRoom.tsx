@@ -43,16 +43,23 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
   }, []);
 
   useEffect(() => {
+    const token = localStorage.getItem('ghostchat_token');
     const stored = localStorage.getItem('ghostchat_user');
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored);
-        if (parsed?.username) {
-          setUsername(parsed.username);
-        }
-      } catch (err) {}
+    if (!token || !stored) {
+      router.push('/');
+      return;
     }
-  }, []);
+    try {
+      const parsed = JSON.parse(stored);
+      if (parsed?.username) {
+        setUsername(parsed.username);
+      } else {
+        router.push('/');
+      }
+    } catch (err) {
+      router.push('/');
+    }
+  }, [router]);
 
   // Socket & WebRTC refs
   const socketRef = useRef<Socket | null>(null);
@@ -163,12 +170,13 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
     }
   };
 
-  // --- Socket.IO & WebRTC Core Engine ---
   useEffect(() => {
     console.log(`🔌 Connecting to GhostChat hub at: ${serverUrl}`);
+    const token = localStorage.getItem('ghostchat_token');
     const socket = io(serverUrl, {
       reconnectionAttempts: 3,
-      timeout: 5000
+      timeout: 5000,
+      auth: { token }
     });
     socketRef.current = socket;
 

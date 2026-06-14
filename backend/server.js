@@ -81,6 +81,34 @@ async function sendOtpEmail(email, code) {
   }
 }
 
+// Generic Helper: Send email notifications
+async function sendEmail(to, subject, text) {
+  if (transporter) {
+    try {
+      await transporter.sendMail({
+        from: `"GhostChat Administration" <${process.env.SMTP_USER}>`,
+        to,
+        subject,
+        text
+      });
+      console.log(`✉️ Mail dispatched to: ${to}`);
+    } catch (err) {
+      console.error(`Failed to send email to ${to}:`, err.message);
+    }
+  } else {
+    console.log(`
+┌────────────────────────────────────────────────────────┐
+│                                                        │
+│   📧 GHOSTCHAT EMAIL NOTIFICATION                      │
+│   👉 TO: ${to.toUpperCase()}                           │
+│   👉 SUBJECT: ${subject}                               │
+│   👉 BODY: ${text.substring(0, Math.min(text.length, 60))}...                 │
+│                                                        │
+└────────────────────────────────────────────────────────┘
+    `);
+  }
+}
+
 // ─── HTTP Endpoints ──────────────────────────────────────────────────────────
 
 // Direct User Registration (No verification code, enforces email unique, checks strength)
@@ -285,23 +313,78 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(400).json({ message: 'Invalid credentials' });
     }
 
+    const deletionHoldActive = !!user.deletion_hold_until;
+
+    // Check and restore account deletion hold
+    if (deletionHoldActive) {
+      await db.setUserDeletionHold(user.username, null);
+      console.log(`♻️ Cancelled account deletion hold for user: ${user.username}`);
+    }
+
     const token = jwt.sign({ userId: user.id, username: user.username }, JWT_SECRET, { expiresIn: '7d' });
-    res.json({ token, username: user.username });
+    res.json({ token, username: user.username, accountRestored: deletionHoldActive });
   } catch (err) {
     console.error('Login error:', err);
     res.status(500).json({ message: 'Internal server error' });
   }
 });
 
+// Anonymous Guest Login
+app.post('/api/auth/anonymous', (req, res) => {
+  try {
+    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+    const guestUsername = `Guest_${randomSuffix}`;
+    const guestUserId = `guest_${Math.random().toString(36).substring(2, 11)}`;
+    
+    const token = jwt.sign(
+      { userId: guestUserId, username: guestUsername, isAnonymous: true },
+      JWT_SECRET,
+      { expiresIn: '1d' }
+    );
+
+    res.json({ token, username: guestUsername });
+  } catch (err) {
+    console.error('Anonymous auth error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
 // Feedback & Data Deletion requests
 app.post('/api/feedback', async (req, res) => {
-  const { name, email, message } = req.body;
+  const { name, email, requestType, message } = req.body;
   if (!email || !message) {
     return res.status(400).json({ message: 'Email and message are required' });
   }
 
   try {
-    const feedback = await db.createFeedback(name || 'Anonymous', email, message);
+    const formattedType = (requestType || 'general').toLowerCase();
+    const feedback = await db.createFeedback(name || 'Anonymous', email, `[Request Type: ${formattedType.toUpperCase()}] ${message}`);
+
+    // Send notification email to subhani25052005@gmail.com
+    await sendEmail(
+      'subhani25052005@gmail.com',
+      `GhostChat Contact Query: [${formattedType.toUpperCase()}]`,
+      `You received a new message from GhostChat:\n\nSender: ${name || 'Anonymous'} (${email})\nType: ${formattedType.toUpperCase()}\nMessage: ${message}`
+    );
+
+    if (formattedType === 'deletion') {
+      // Find user matching this email
+      const user = await db.getUserByEmail(email);
+      if (user) {
+        // Place account on hold for 30 days
+        const holdUntil = new Date();
+        holdUntil.setDate(holdUntil.getDate() + 30);
+        await db.setUserDeletionHold(user.username, holdUntil);
+
+        // Send confirmation email to user
+        await sendEmail(
+          email,
+          'GhostChat Account Deletion Scheduled (30-day Hold)',
+          `Hello ${user.username},\n\nWe received your request to delete your account. Your account has been put on a 30-day hold.\n\nYou can restore and return to your account at any time within the next 30 days simply by logging back in. If you do not log in within 30 days, your account and all associated data will be permanently deleted.`
+        );
+      }
+    }
+
     res.status(201).json({ message: 'Feedback recorded successfully', feedback });
   } catch (err) {
     console.error('Feedback recording error:', err);
@@ -317,19 +400,52 @@ app.post('/api/reports', async (req, res) => {
   try {
     const report = await db.createReport({
       reporter_ip: ip,
-      reported_ip: ip, // Mocking same IP or resolving from sessions
+      reported_ip: ip,
       reporter_username: reporter_username || 'Anonymous',
       reported_username: reported_username || 'Stranger',
       reason,
       details
     });
 
-    // AI/Auto-moderation simulation
     if (reported_username && reported_username !== 'Stranger') {
-      const banExpires = new Date();
-      banExpires.setHours(banExpires.getHours() + 24); // 24-hour warning ban
-      await db.createBan(reported_username, `Auto-moderation ban due to user reports: ${reason}`, banExpires);
-      console.log(`🔨 Auto-banned user: ${reported_username} for 24h`);
+      const user = await db.getUserByUsername(reported_username);
+      if (user && user.email) {
+        const reportCount = await db.getReportsCountForUser(reported_username);
+
+        if (reportCount >= 5) {
+          // BANNED AND DELETED ACCOUNT IMMEDIATELY
+          const banExpires = new Date();
+          banExpires.setFullYear(banExpires.getFullYear() + 99); // Permanent ban
+          await db.createBan(reported_username, `Banned due to receiving ${reportCount} reports of abuse.`, banExpires);
+          await db.deleteUser(reported_username);
+
+          // Send termination email
+          await sendEmail(
+            user.email,
+            'GhostChat Account Permanently Banned and Deleted',
+            `Hello ${reported_username},\n\nYour GhostChat account has been permanently banned and deleted due to receiving 5 or more abuse reports. Your active socket connection has been closed.`
+          );
+
+          // Disconnect active socket
+          for (const [socketId, socketUser] of users.entries()) {
+            if (socketUser.username === reported_username) {
+              socketUser.socket.emit('chat_message', { 
+                text: '🔴 You have been permanently banned due to receiving 5 or more reports.', 
+                from: 'system' 
+              });
+              socketUser.socket.disconnect(true);
+              console.log(`🔌 Disconnected banned user socket: ${reported_username}`);
+            }
+          }
+        } else {
+          // SEND WARNING EMAIL
+          await sendEmail(
+            user.email,
+            'GhostChat Account Abuse Warning',
+            `Hello ${reported_username},\n\nWarning: Your GhostChat account has been reported for: "${reason}". Details: ${details || 'No details provided'}.\n\nNote: If you receive 5 or more reports, your account will be permanently banned and deleted. Current reports: ${reportCount}/5.`
+          );
+        }
+      }
     }
 
     res.status(201).json({ message: 'Report recorded successfully', report });
@@ -433,7 +549,20 @@ function disconnectFromPartner(socketId) {
   user.partner = null;
 }
 
-// ─── Socket Events ────────────────────────────────────────────────────────────
+// Socket Middleware: Validate JWT
+io.use((socket, next) => {
+  const token = socket.handshake.auth?.token;
+  if (!token) {
+    return next(new Error('Authentication error: Token required'));
+  }
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    socket.user = decoded;
+    next();
+  } catch (err) {
+    return next(new Error('Authentication error: Invalid token'));
+  }
+});
 
 io.on('connection', async (socket) => {
   const ip = socket.handshake.address || socket.conn.remoteAddress || '127.0.0.1';
@@ -450,10 +579,12 @@ io.on('connection', async (socket) => {
   totalOnline++;
   broadcastOnlineCount();
 
+  const connUsername = socket.user?.username || 'Guest_' + Math.floor(1000 + Math.random() * 9000);
+
   users.set(socket.id, {
     socket,
     ip,
-    username: 'Guest_' + Math.floor(1000 + Math.random() * 9000),
+    username: connUsername,
     interests: [],
     partner: null,
     mode: 'video',
@@ -462,16 +593,22 @@ io.on('connection', async (socket) => {
     blockedList: []
   });
 
-  console.log(`🟢 Connected: ${socket.id} (${ip}) | Total: ${totalOnline}`);
+  console.log(`🟢 Connected: ${socket.id} (${ip}) | Total: ${totalOnline} | User: ${connUsername}`);
 
   // Find Stranger matching
-  socket.on('find_stranger', ({ interests = [], language = 'all', country = 'all', mode = 'video', username }) => {
+  socket.on('find_stranger', async ({ interests = [], language = 'all', country = 'all', mode = 'video', username }) => {
     const user = users.get(socket.id);
     if (!user) return;
 
-    if (username) {
-      user.username = username;
+    const targetUsername = socket.user?.username || username || user.username;
+    // Check Username Ban
+    const userBanned = await db.isBanned(targetUsername);
+    if (userBanned) {
+      socket.emit('chat_message', { text: `🔴 Access Denied: Your account has been permanently banned. Reason: ${userBanned.reason}`, from: 'system' });
+      socket.disconnect(true);
+      return;
     }
+    user.username = targetUsername;
 
     if (user.partner) {
       disconnectFromPartner(socket.id);

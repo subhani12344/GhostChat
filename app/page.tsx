@@ -50,15 +50,6 @@ export default function Home() {
     return () => clearInterval(intervalId);
   }, [serverUrl]);
 
-  const handleAnonymousChat = () => {
-    const randomGuest = 'Guest_' + Math.floor(1000 + Math.random() * 9000);
-    const mockToken = 'guest_token_' + Math.random().toString(36).substring(2);
-    localStorage.setItem('ghostchat_token', mockToken);
-    localStorage.setItem('ghostchat_user', JSON.stringify({ username: randomGuest }));
-    setUser({ username: randomGuest });
-    router.push('/chat?mode=video');
-  };
-
   const handleChatStart = (targetPath: string) => {
     if (user) {
       router.push(targetPath);
@@ -79,7 +70,7 @@ export default function Home() {
           localStorage.removeItem('ghostchat_user');
           setUser(null);
         }}
-        onAnonymousChatClick={handleAnonymousChat}
+        onAuthSuccess={(u) => setUser(u)}
       />
 
       {/* Hero Section */}

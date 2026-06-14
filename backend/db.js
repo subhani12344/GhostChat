@@ -74,13 +74,17 @@ async function initDb() {
           email VARCHAR(100) UNIQUE,
           password VARCHAR(255) NOT NULL,
           role VARCHAR(20) DEFAULT 'user',
+          deletion_hold_until TIMESTAMP,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
       `);
 
-      // Ensure existing database has the email column
+      // Ensure existing database has the email and hold columns
       await pool.query(`
         ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(100) UNIQUE;
+      `);
+      await pool.query(`
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS deletion_hold_until TIMESTAMP;
       `);
 
       await pool.query(`
@@ -148,27 +152,47 @@ const db = {
   async getUserByUsername(username) {
     if (usePostgres) {
       const res = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
-      return res.rows[0];
+      const user = res.rows[0];
+      if (user) {
+        const pruned = await db.pruneExpiredDeletion(user);
+        if (pruned) return null;
+      }
+      return user;
     } else {
       const data = readJsonDb();
-      return data.users.find(u => u.username === username);
+      const user = data.users.find(u => u.username === username);
+      if (user) {
+        const pruned = await db.pruneExpiredDeletion(user);
+        if (pruned) return null;
+      }
+      return user;
     }
   },
 
   async getUserByEmail(email) {
     if (usePostgres) {
       const res = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-      return res.rows[0] || null;
+      const user = res.rows[0];
+      if (user) {
+        const pruned = await db.pruneExpiredDeletion(user);
+        if (pruned) return null;
+      }
+      return user;
     } else {
       const data = readJsonDb();
-      return data.users.find(u => u.email === email) || null;
+      const user = data.users.find(u => u.email === email);
+      if (user) {
+        const pruned = await db.pruneExpiredDeletion(user);
+        if (pruned) return null;
+      }
+      return user;
     }
   },
 
   async createUser(username, email, hashedPassword, role = 'user') {
     if (usePostgres) {
       const res = await pool.query(
-        'INSERT INTO users (username, email, password, role) VALUES ($1, $2, $3, $4) RETURNING *',
+        'INSERT INTO users (username, email, password, role, deletion_hold_until) VALUES ($1, $2, $3, $4, NULL) RETURNING *',
         [username, email, hashedPassword, role]
       );
       return res.rows[0];
@@ -180,11 +204,62 @@ const db = {
         email,
         password: hashedPassword,
         role,
+        deletion_hold_until: null,
         created_at: new Date().toISOString()
       };
       data.users.push(newUser);
       writeJsonDb(data);
       return newUser;
+    }
+  },
+
+  async deleteUser(username) {
+    if (usePostgres) {
+      await pool.query('DELETE FROM users WHERE username = $1', [username]);
+      // Prune reports and bans associated
+      await pool.query('DELETE FROM reports WHERE reported_username = $1', [username]);
+      await pool.query('DELETE FROM bans WHERE target = $1', [username]);
+    } else {
+      const data = readJsonDb();
+      data.users = data.users.filter(u => u.username !== username);
+      data.reports = data.reports.filter(r => r.reported_username !== username);
+      data.bans = data.bans.filter(b => b.target !== username);
+      writeJsonDb(data);
+    }
+  },
+
+  async setUserDeletionHold(username, holdUntil) {
+    const holdUntilStr = holdUntil ? holdUntil.toISOString() : null;
+    if (usePostgres) {
+      await pool.query('UPDATE users SET deletion_hold_until = $2 WHERE username = $1', [username, holdUntil]);
+    } else {
+      const data = readJsonDb();
+      const idx = data.users.findIndex(u => u.username === username);
+      if (idx !== -1) {
+        data.users[idx].deletion_hold_until = holdUntilStr;
+        writeJsonDb(data);
+      }
+    }
+  },
+
+  async pruneExpiredDeletion(user) {
+    if (user && user.deletion_hold_until) {
+      const holdDate = new Date(user.deletion_hold_until);
+      if (holdDate < new Date()) {
+        await db.deleteUser(user.username);
+        return true;
+      }
+    }
+    return false;
+  },
+
+  async getReportsCountForUser(username) {
+    if (usePostgres) {
+      const res = await pool.query('SELECT count(*) FROM reports WHERE reported_username = $1', [username]);
+      return parseInt(res.rows[0].count, 10);
+    } else {
+      const data = readJsonDb();
+      return data.reports.filter(r => r.reported_username === username).length;
     }
   },
 

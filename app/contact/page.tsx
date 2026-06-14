@@ -41,7 +41,8 @@ export default function ContactUs() {
         body: JSON.stringify({
           name,
           email,
-          message: `[Request Type: ${requestType.toUpperCase()}] ${message}`
+          requestType,
+          message
         })
       });
 
@@ -71,6 +72,7 @@ export default function ContactUs() {
           localStorage.removeItem('ghostchat_user');
           setUser(null);
         }}
+        onAuthSuccess={(u) => setUser(u)}
       />
 
       <main className="flex-grow py-16 px-4 sm:px-6 lg:px-8 max-w-3xl mx-auto space-y-12 w-full">

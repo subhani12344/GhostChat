@@ -32,6 +32,7 @@ export default function TermsOfService() {
           localStorage.removeItem('ghostchat_user');
           setUser(null);
         }}
+        onAuthSuccess={(u) => setUser(u)}
       />
 
       <main className="flex-grow py-16 px-4 sm:px-6 lg:px-8 max-w-4xl mx-auto">
@@ -87,10 +88,7 @@ export default function TermsOfService() {
           <section className="space-y-4">
             <h2 className="text-2xl font-bold text-brand-black border-b border-brand-gray-mid/30 pb-2">4. DMCA / Copyright Policy</h2>
             <p className="text-sm text-brand-black/70 leading-relaxed">
-              If you believe any content on the site infringes your copyright, please submit a written DMCA takedown notice containing proof of ownership, a description of the copyrighted work, and contact details to:{' '}
-              <a href="mailto:support@ghostchat.com" className="text-brand-black font-semibold underline">
-                support@ghostchat.com
-              </a>
+              If you believe any content on the site infringes your copyright, please submit a written DMCA takedown notice containing proof of ownership, a description of the copyrighted work, and contact details via our Contact page.
             </p>
           </section>
         </article>
