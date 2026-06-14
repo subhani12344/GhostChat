@@ -83,6 +83,49 @@ async function sendOtpEmail(email, code) {
 
 // ─── HTTP Endpoints ──────────────────────────────────────────────────────────
 
+// Direct User Registration (No verification code, enforces email unique, checks strength)
+app.post('/api/auth/register', async (req, res) => {
+  const { username, email, password } = req.body;
+  if (!username || !email || !password) {
+    return res.status(400).json({ message: 'All fields are required' });
+  }
+
+  // Password strength validation
+  const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]).{8,}$/;
+  if (!passwordRegex.test(password)) {
+    return res.status(400).json({
+      message: 'Password must be at least 8 characters, contain at least one capital letter, one lowercase letter, one number, and one symbol.'
+    });
+  }
+
+  try {
+    // Check if username already exists
+    const existingUser = await db.getUserByUsername(username);
+    if (existingUser) {
+      return res.status(400).json({ message: 'Username is already taken' });
+    }
+
+    // Check if email already registered
+    const existingEmail = await db.getUserByEmail(email);
+    if (existingEmail) {
+      return res.status(400).json({ message: 'Email address is already registered to another account' });
+    }
+
+    // Hash the password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create user directly
+    const newUser = await db.createUser(username, email, hashedPassword, 'user');
+
+    // Create JWT Token
+    const token = jwt.sign({ userId: newUser.id, username: newUser.username }, JWT_SECRET, { expiresIn: '7d' });
+    res.status(201).json({ token, username: newUser.username });
+  } catch (err) {
+    console.error('Registration error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
 // User Registration Request (Generates OTP)
 app.post('/api/auth/register-request', async (req, res) => {
   const { username, email, password } = req.body;
