@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useRef, useEffect } from 'react';
-import { CameraOff, MicOff, ShieldAlert, Video } from 'lucide-react';
+import React, { useRef, useEffect, useState } from 'react';
+import { CameraOff, MicOff, ShieldAlert, Video, UserPlus, UserCheck, Heart, Check, Loader2 } from 'lucide-react';
+import { Socket } from 'socket.io-client';
 
 interface VideoTileProps {
   localStream: MediaStream | null;
@@ -12,6 +13,9 @@ interface VideoTileProps {
   isMatching: boolean;
   onReportClick: () => void;
   chatMode?: 'video' | 'text';
+  partnerUsername?: string | null;
+  serverUrl?: string;
+  socket?: Socket | null;
 }
 
 export default function VideoTile({
@@ -22,10 +26,195 @@ export default function VideoTile({
   isConnected,
   isMatching,
   onReportClick,
-  chatMode = 'video'
+  chatMode = 'video',
+  partnerUsername = null,
+  serverUrl = 'http://localhost:4000',
+  socket = null
 }: VideoTileProps) {
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
+
+  const [relation, setRelation] = useState<'none' | 'pending' | 'incoming_pending' | 'accepted' | null>(null);
+  const [isMutual, setIsMutual] = useState(false);
+  const [loadingRelation, setLoadingRelation] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
+
+  const isGuest = partnerUsername ? partnerUsername.startsWith('Guest_') : true;
+
+  // Check if current user is logged in (and not a guest)
+  const [currentUser, setCurrentUser] = useState<{ username: string } | null>(null);
+  useEffect(() => {
+    const stored = localStorage.getItem('ghostchat_user');
+    if (stored) {
+      setCurrentUser(JSON.parse(stored));
+    }
+  }, []);
+
+  const isCurrentUserGuest = currentUser ? currentUser.username.startsWith('Guest_') : true;
+  const showFollowButton = isConnected && partnerUsername && !isGuest && !isCurrentUserGuest;
+
+  const fetchRelation = async () => {
+    if (!partnerUsername || isGuest || isCurrentUserGuest) return;
+    setLoadingRelation(true);
+    try {
+      const token = localStorage.getItem('ghostchat_token');
+      const headers: any = { 'Content-Type': 'application/json' };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      const res = await fetch(`${serverUrl}/api/users/${partnerUsername}/profile`, {
+        headers
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setRelation(data.relation || 'none');
+        setIsMutual(!!data.isMutual);
+      }
+    } catch (err) {
+      console.error('Failed to fetch relation in VideoTile:', err);
+    } finally {
+      setLoadingRelation(false);
+    }
+  };
+
+  useEffect(() => {
+    if (showFollowButton) {
+      fetchRelation();
+    } else {
+      setRelation(null);
+      setIsMutual(false);
+    }
+  }, [partnerUsername, isConnected, currentUser]);
+
+  // Listen to socket follow events to stay synchronized
+  useEffect(() => {
+    if (!socket || !showFollowButton) return;
+
+    const handleFollowUpdate = () => {
+      fetchRelation();
+    };
+
+    socket.on('follow_update', handleFollowUpdate);
+    socket.on('follow_accepted_incoming', handleFollowUpdate);
+    socket.on('follow_request_incoming', handleFollowUpdate);
+
+    return () => {
+      socket.off('follow_update', handleFollowUpdate);
+      socket.off('follow_accepted_incoming', handleFollowUpdate);
+      socket.off('follow_request_incoming', handleFollowUpdate);
+    };
+  }, [socket, showFollowButton, partnerUsername]);
+
+  const handleFollowClick = async () => {
+    if (!partnerUsername || actionLoading || !relation) return;
+    setActionLoading(true);
+
+    const token = localStorage.getItem('ghostchat_token');
+    if (!token) {
+      setActionLoading(false);
+      return;
+    }
+
+    try {
+      let endpoint = '';
+      let method = 'POST';
+
+      if (relation === 'none') {
+        endpoint = '/api/follow/request';
+      } else if (relation === 'incoming_pending') {
+        endpoint = '/api/follow/accept';
+      } else if (relation === 'accepted') {
+        endpoint = '/api/follow/unfollow';
+        method = 'DELETE';
+      } else {
+        setActionLoading(false);
+        return;
+      }
+
+      const res = await fetch(`${serverUrl}${endpoint}`, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ targetUsername: partnerUsername })
+      });
+
+      if (res.ok) {
+        if (socket) {
+          if (endpoint === '/api/follow/request') {
+            socket.emit('follow_request', { targetUsername: partnerUsername });
+          } else if (endpoint === '/api/follow/accept') {
+            socket.emit('follow_accept', { targetUsername: partnerUsername });
+          }
+        }
+        await fetchRelation();
+      }
+    } catch (err) {
+      console.error('Follow click action failed:', err);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const renderFollowButton = (mode: 'video' | 'text') => {
+    if (!showFollowButton || !relation) return null;
+
+    let btnClass = "";
+    let btnText = "";
+    let btnIcon = null;
+
+    if (actionLoading || loadingRelation) {
+      btnClass = "bg-white/25 border-white/10 text-white/50 cursor-not-allowed";
+      btnText = "Processing...";
+      btnIcon = <Loader2 size={12} className="animate-spin" />;
+    } else if (relation === 'none') {
+      btnClass = mode === 'video'
+        ? "bg-white text-brand-black hover:bg-white/95 border-white shadow-md active:scale-95"
+        : "bg-brand-black text-white hover:bg-brand-black/90 border-brand-black active:scale-95";
+      btnText = "Follow";
+      btnIcon = <UserPlus size={12} />;
+    } else if (relation === 'pending') {
+      btnClass = mode === 'video'
+        ? "bg-white/10 border-white/20 text-white/40 cursor-not-allowed"
+        : "bg-brand-gray-light border-brand-gray-mid/60 text-brand-black/40 cursor-not-allowed";
+      btnText = "Requested";
+      btnIcon = <UserCheck size={12} />;
+    } else if (relation === 'incoming_pending') {
+      btnClass = "bg-emerald-600 text-white hover:bg-emerald-700 active:scale-95 border-emerald-600";
+      btnText = "Accept Follow";
+      btnIcon = <UserCheck size={12} />;
+    } else if (relation === 'accepted') {
+      if (isMutual) {
+        btnClass = mode === 'video'
+          ? "bg-white/10 border-white/20 text-white hover:bg-red-600/20 hover:text-red-400 hover:border-red-500/30 active:scale-95"
+          : "bg-brand-gray-light/35 border-brand-gray-mid/60 text-brand-black hover:bg-red-50 hover:text-red-600 hover:border-red-200 active:scale-95";
+        btnText = "Mutual Follow";
+        btnIcon = <Heart size={12} className={mode === 'video' ? "fill-white text-white" : "fill-brand-black text-brand-black"} />;
+      } else {
+        btnClass = mode === 'video'
+          ? "bg-white/10 border-white/20 text-white hover:bg-white/20 active:scale-95"
+          : "bg-white border-brand-gray-mid/60 text-brand-black hover:bg-brand-gray-light active:scale-95";
+        btnText = "Following";
+        btnIcon = <Check size={12} />;
+      }
+    }
+
+    const posClass = mode === 'video' 
+      ? "absolute right-28 top-4 sm:right-4 z-30" 
+      : "absolute right-4 top-4 z-30";
+
+    return (
+      <button
+        onClick={handleFollowClick}
+        disabled={actionLoading || relation === 'pending'}
+        className={`${posClass} flex items-center gap-1.5 rounded-lg border px-3.5 py-1.5 text-2xs font-bold uppercase tracking-wider transition-all select-none cursor-pointer`}
+      >
+        {btnIcon}
+        {btnText}
+      </button>
+    );
+  };
 
   // Attach local stream
   useEffect(() => {
@@ -55,6 +244,8 @@ export default function VideoTile({
             Report
           </button>
         )}
+
+        {renderFollowButton('text')}
 
         <div className="flex flex-col items-center justify-center max-w-sm space-y-6">
           {/* Ghost Icon with floating shadow */}
@@ -196,6 +387,8 @@ export default function VideoTile({
           Report
         </button>
       )}
+
+      {renderFollowButton('video')}
     </div>
   );
 }

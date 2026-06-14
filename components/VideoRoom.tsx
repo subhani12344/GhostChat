@@ -610,6 +610,9 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
               isMatching={isMatching}
               onReportClick={() => setReportOpen(true)}
               chatMode={chatMode}
+              partnerUsername={partnerUsername}
+              serverUrl={serverUrl}
+              socket={socketRef.current}
             />
           </div>
 
