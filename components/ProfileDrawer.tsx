@@ -45,6 +45,14 @@ export default function ProfileDrawer({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Crop image states
+  const [rawImageToCrop, setRawImageToCrop] = useState<string | null>(null);
+  const [imageAspect, setImageAspect] = useState(1);
+  const [zoom, setZoom] = useState(1);
+  const [position, setPosition] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+
   // Fetch current user profile
   const fetchMyProfile = async () => {
     if (!currentUser || currentUser.username.startsWith('Guest_')) return;
@@ -79,17 +87,77 @@ export default function ProfileDrawer({
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Check size limit (limit to 1.5MB for base64 storage)
-    if (file.size > 1.5 * 1024 * 1024) {
-      setError('Image must be smaller than 1.5MB');
+    // Check size limit (limit to 10MB as requested by user)
+    if (file.size > 10 * 1024 * 1024) {
+      setError('Image must be smaller than 10MB');
       return;
     }
 
     const reader = new FileReader();
     reader.onloadend = () => {
-      setProfileImg(reader.result as string);
+      setRawImageToCrop(reader.result as string);
+      setZoom(1);
+      setPosition({ x: 0, y: 0 });
     };
     reader.readAsDataURL(file);
+  };
+
+  const handleDragStart = (e: React.MouseEvent | React.TouchEvent) => {
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    setIsDragging(true);
+    setDragStart({ x: clientX - position.x, y: clientY - position.y });
+  };
+
+  const handleDragMove = (e: React.MouseEvent | React.TouchEvent) => {
+    if (!isDragging) return;
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    setPosition({
+      x: clientX - dragStart.x,
+      y: clientY - dragStart.y
+    });
+  };
+
+  const handleDragEnd = () => {
+    setIsDragging(false);
+  };
+
+  const executeCrop = () => {
+    if (!rawImageToCrop) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = 300;
+    canvas.height = 300;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const img = new Image();
+    img.onload = () => {
+      // Clear canvas
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, 300, 300);
+
+      // Center drawing context
+      ctx.translate(150, 150);
+      ctx.translate(position.x, position.y);
+      ctx.scale(zoom, zoom);
+
+      // Draw image
+      let displayWidth = 300;
+      let displayHeight = 300;
+      if (imageAspect > 1) {
+        displayWidth = 300 * imageAspect;
+      } else {
+        displayHeight = 300 / imageAspect;
+      }
+
+      ctx.drawImage(img, -displayWidth / 2, -displayHeight / 2, displayWidth, displayHeight);
+
+      const croppedData = canvas.toDataURL('image/jpeg', 0.85);
+      setProfileImg(croppedData);
+      setRawImageToCrop(null); // Close crop modal
+    };
+    img.src = rawImageToCrop;
   };
 
   const handleSaveProfile = async (e: React.FormEvent) => {
@@ -585,6 +653,87 @@ export default function ProfileDrawer({
                 Cancel Call
               </button>
             )}
+          </div>
+        </div>
+      )}
+      {/* Photo Crop Modal */}
+      {rawImageToCrop && (
+        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/85 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl border border-brand-gray-mid/30 space-y-5 flex flex-col animate-in zoom-in-95 duration-200">
+            {/* Modal Header */}
+            <div className="text-center">
+              <h4 className="font-extrabold text-brand-black text-base">Crop Profile Picture</h4>
+              <p className="text-[10px] text-brand-black/55 mt-0.5">Drag to position, use the slider to zoom</p>
+            </div>
+
+            {/* Viewport Box (300x300 container) */}
+            <div 
+              onMouseDown={handleDragStart}
+              onMouseMove={handleDragMove}
+              onMouseUp={handleDragEnd}
+              onMouseLeave={handleDragEnd}
+              onTouchStart={handleDragStart}
+              onTouchMove={handleDragMove}
+              onTouchEnd={handleDragEnd}
+              className="w-full aspect-square relative overflow-hidden bg-brand-gray-light rounded-xl border border-brand-gray-mid/40 flex items-center justify-center cursor-move"
+            >
+              <img
+                src={rawImageToCrop}
+                alt="Original select to crop"
+                onLoad={(e) => {
+                  const img = e.currentTarget;
+                  setImageAspect(img.naturalWidth / img.naturalHeight);
+                }}
+                style={{
+                  transform: `translate(${position.x}px, ${position.y}px) scale(${zoom})`,
+                  width: imageAspect > 1 ? 'auto' : '100%',
+                  height: imageAspect > 1 ? '100%' : 'auto',
+                  maxWidth: 'none',
+                  maxHeight: 'none',
+                }}
+                className="absolute select-none pointer-events-none transition-transform duration-75"
+              />
+
+              {/* Circular Overlay Indicator */}
+              <div className="absolute inset-0 border-4 border-black/45 rounded-xl pointer-events-none flex items-center justify-center">
+                <div className="w-full h-full rounded-full border border-dashed border-white/90 shadow-[0_0_0_9999px_rgba(0,0,0,0.5)]" />
+              </div>
+            </div>
+
+            {/* Slider Controls */}
+            <div className="space-y-1.5">
+              <div className="flex justify-between text-2xs font-bold uppercase tracking-wider text-brand-black/60">
+                <span>Scale / Zoom</span>
+                <span className="tabular-nums">{Math.round(zoom * 100)}%</span>
+              </div>
+              <input
+                type="range"
+                min="1"
+                max="3"
+                step="0.05"
+                value={zoom}
+                onChange={(e) => setZoom(parseFloat(e.target.value))}
+                className="w-full h-1.5 bg-brand-gray-mid rounded-lg appearance-none cursor-pointer accent-brand-black"
+              />
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex gap-3 pt-1">
+              <button
+                type="button"
+                onClick={executeCrop}
+                className="flex-1 rounded-xl bg-brand-black py-2.5 text-xs font-bold uppercase tracking-wider text-white transition-all hover:bg-brand-black/90 active:scale-95 cursor-pointer text-center"
+              >
+                Apply Crop
+              </button>
+              <button
+                type="button"
+                onClick={() => setRawImageToCrop(null)}
+                className="rounded-xl border border-brand-gray-mid/60 px-5 py-2.5 text-xs font-bold uppercase tracking-wider text-brand-black hover:bg-brand-gray-light cursor-pointer text-center"
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         </div>
       )}
