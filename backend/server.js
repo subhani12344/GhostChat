@@ -27,7 +27,15 @@ const JWT_SECRET = process.env.JWT_SECRET || 'ghostchat_secure_secret_key';
 
 // Transporter setup for email OTP dispatch (mock/production)
 let transporter;
-if (process.env.SMTP_HOST) {
+if (process.env.SMTP_SERVICE) {
+  transporter = nodemailer.createTransport({
+    service: process.env.SMTP_SERVICE,
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS
+    }
+  });
+} else if (process.env.SMTP_HOST) {
   transporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST,
     port: parseInt(process.env.SMTP_PORT || '587', 10),
@@ -35,6 +43,9 @@ if (process.env.SMTP_HOST) {
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS
+    },
+    tls: {
+      rejectUnauthorized: false
     }
   });
 }
