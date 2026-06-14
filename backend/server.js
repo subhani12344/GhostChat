@@ -455,8 +455,289 @@ app.post('/api/reports', async (req, res) => {
   }
 });
 
+// Middleware: Authenticate REST requests
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  if (!token) return res.status(401).json({ message: 'Access token required' });
 
-// ─── Socket Matching State ───────────────────────────────────────────────────
+  jwt.verify(token, JWT_SECRET, (err, decoded) => {
+    if (err) return res.status(403).json({ message: 'Invalid or expired token' });
+    req.user = decoded;
+    next();
+  });
+}
+
+// REST: Get User Profile
+app.get('/api/users/:username/profile', async (req, res) => {
+  const { username } = req.params;
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  let requester = null;
+  if (token) {
+    try {
+      requester = jwt.verify(token, JWT_SECRET);
+    } catch (err) {}
+  }
+
+  try {
+    const user = await db.getUserByUsername(username);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const followersCount = await db.getFollowersCount(username);
+    const followingCount = await db.getFollowingCount(username);
+
+    let relation = 'none';
+    if (requester && requester.username !== username) {
+      const relOut = await db.getFollowRelationship(requester.username, username);
+      const relIn = await db.getFollowRelationship(username, requester.username);
+      
+      if (relOut && relOut.status === 'accepted') {
+        relation = 'accepted';
+      } else if (relOut && relOut.status === 'pending') {
+        relation = 'pending';
+      } else if (relIn && relIn.status === 'pending') {
+        relation = 'incoming_pending';
+      }
+    }
+
+    let isMutual = false;
+    if (requester && requester.username !== username) {
+      const relOut = await db.getFollowRelationship(requester.username, username);
+      const relIn = await db.getFollowRelationship(username, requester.username);
+      isMutual = !!(relOut && relOut.status === 'accepted' && relIn && relIn.status === 'accepted');
+    }
+
+    res.json({
+      username: user.username,
+      nickname: user.nickname || '',
+      bio: user.bio || '',
+      profile_img: user.profile_img || '',
+      followersCount,
+      followingCount,
+      relation,
+      isMutual
+    });
+  } catch (err) {
+    console.error('Fetch profile error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Update User Profile
+app.put('/api/profile', authenticateToken, async (req, res) => {
+  if (req.user.isAnonymous) {
+    return res.status(403).json({ message: 'Guest profiles cannot be modified' });
+  }
+
+  const { nickname, bio, profile_img } = req.body;
+  try {
+    const updated = await db.updateUserProfile(req.user.username, nickname, bio, profile_img);
+    res.json({
+      message: 'Profile updated successfully',
+      user: {
+        username: updated.username,
+        nickname: updated.nickname,
+        bio: updated.bio,
+        profile_img: updated.profile_img
+      }
+    });
+  } catch (err) {
+    console.error('Update profile error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Send Follow Request
+app.post('/api/follow/request', authenticateToken, async (req, res) => {
+  if (req.user.isAnonymous) {
+    return res.status(403).json({ message: 'Guests cannot perform follow actions' });
+  }
+
+  const { targetUsername } = req.body;
+  if (!targetUsername || targetUsername === req.user.username) {
+    return res.status(400).json({ message: 'Invalid target username' });
+  }
+
+  try {
+    const targetUser = await db.getUserByUsername(targetUsername);
+    if (!targetUser) return res.status(404).json({ message: 'Target user not found' });
+
+    const relationship = await db.sendFollowRequest(req.user.username, targetUsername);
+    const notif = await db.createNotification(targetUsername, req.user.username, 'follow_request');
+
+    const targetSocketId = onlineUsers.get(targetUsername);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('new_notification', {
+        id: notif.id,
+        sender_username: req.user.username,
+        type: 'follow_request',
+        status: 'unread',
+        created_at: notif.created_at
+      });
+    }
+
+    res.json({ message: 'Follow request sent', relationship });
+  } catch (err) {
+    console.error('Follow request error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Accept Follow Request
+app.post('/api/follow/accept', authenticateToken, async (req, res) => {
+  if (req.user.isAnonymous) {
+    return res.status(403).json({ message: 'Guests cannot perform follow actions' });
+  }
+
+  const { targetUsername } = req.body;
+  if (!targetUsername) return res.status(400).json({ message: 'Target username is required' });
+
+  try {
+    const relationship = await db.acceptFollowRequest(targetUsername, req.user.username);
+    await db.deleteFollowRequestNotification(targetUsername, req.user.username);
+    const notif = await db.createNotification(targetUsername, req.user.username, 'follow_accept');
+
+    const targetSocketId = onlineUsers.get(targetUsername);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('new_notification', {
+        id: notif.id,
+        sender_username: req.user.username,
+        type: 'follow_accept',
+        status: 'unread',
+        created_at: notif.created_at
+      });
+      io.to(targetSocketId).emit('follow_update');
+    }
+
+    res.json({ message: 'Follow request accepted', relationship });
+  } catch (err) {
+    console.error('Accept follow error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Decline Follow Request
+app.post('/api/follow/decline', authenticateToken, async (req, res) => {
+  if (req.user.isAnonymous) {
+    return res.status(403).json({ message: 'Guests cannot perform follow actions' });
+  }
+
+  const { targetUsername } = req.body;
+  if (!targetUsername) return res.status(400).json({ message: 'Target username is required' });
+
+  try {
+    await db.unfollowUser(targetUsername, req.user.username);
+    await db.deleteFollowRequestNotification(targetUsername, req.user.username);
+    res.json({ message: 'Follow request declined' });
+  } catch (err) {
+    console.error('Decline follow error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Unfollow User
+app.delete('/api/follow/unfollow', authenticateToken, async (req, res) => {
+  if (req.user.isAnonymous) {
+    return res.status(403).json({ message: 'Guests cannot perform follow actions' });
+  }
+
+  const { targetUsername } = req.body;
+  if (!targetUsername) return res.status(400).json({ message: 'Target username is required' });
+
+  try {
+    await db.unfollowUser(req.user.username, targetUsername);
+    await db.deleteFollowRequestNotification(req.user.username, targetUsername);
+    res.json({ message: 'Unfollowed successfully' });
+  } catch (err) {
+    console.error('Unfollow error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Get Followers List
+app.get('/api/followers', authenticateToken, async (req, res) => {
+  try {
+    const list = await db.getFollowers(req.user.username);
+    res.json(list);
+  } catch (err) {
+    console.error('Get followers list error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Get Following List
+app.get('/api/following', authenticateToken, async (req, res) => {
+  try {
+    const list = await db.getFollowing(req.user.username);
+    res.json(list);
+  } catch (err) {
+    console.error('Get following list error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Get Notifications
+app.get('/api/notifications', authenticateToken, async (req, res) => {
+  try {
+    const list = await db.getNotifications(req.user.username);
+    res.json(list);
+  } catch (err) {
+    console.error('Get notifications error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Mark Notifications Read
+app.put('/api/notifications/read', authenticateToken, async (req, res) => {
+  try {
+    await db.markNotificationsRead(req.user.username);
+    res.json({ message: 'Notifications marked as read' });
+  } catch (err) {
+    console.error('Mark read notifications error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Delete Notification
+app.delete('/api/notifications/:id', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  try {
+    await db.deleteNotification(id);
+    res.json({ message: 'Notification deleted' });
+  } catch (err) {
+    console.error('Delete notification error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Online Mutual Followers
+app.get('/api/followers/mutual-online', authenticateToken, async (req, res) => {
+  try {
+    const followers = await db.getFollowers(req.user.username);
+    const following = await db.getFollowing(req.user.username);
+    const followingNames = following.map(u => u.username);
+    const mutuals = followers.filter(u => followingNames.includes(u.username));
+    
+    const list = mutuals.map(u => ({
+      ...u,
+      online: onlineUsers.has(u.username)
+    }));
+    res.json(list);
+  } catch (err) {
+    console.error('Fetch mutual online error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+
+// Map of online registered usernames -> socketId
+const onlineUsers = new Map();
+
+// Map of roomId -> socketId for private matches
+const privateRooms = new Map();
 
 // Map of socketId → User state
 const users = new Map();
@@ -581,6 +862,10 @@ io.on('connection', async (socket) => {
 
   const connUsername = socket.user?.username || 'Guest_' + Math.floor(1000 + Math.random() * 9000);
 
+  if (socket.user && !socket.user.isAnonymous) {
+    onlineUsers.set(socket.user.username, socket.id);
+  }
+
   users.set(socket.id, {
     socket,
     ip,
@@ -631,6 +916,91 @@ io.on('connection', async (socket) => {
       waitingQueue.push({ socketId: socket.id, interests, language, country, mode });
       socket.emit('waiting');
       console.log(`⏳ Waiting: ${socket.id} | Queue: ${waitingQueue.length}`);
+    }
+  });
+
+  // Join Private Room Matching
+  socket.on('join_private_room', ({ roomId, username }) => {
+    const user = users.get(socket.id);
+    if (!user) return;
+
+    const targetUsername = socket.user?.username || username || user.username;
+    user.username = targetUsername;
+
+    if (user.partner) {
+      disconnectFromPartner(socket.id);
+    }
+    user.partner = null;
+
+    removeFromQueue(socket.id);
+
+    if (socket.user && !socket.user.isAnonymous) {
+      onlineUsers.set(socket.user.username, socket.id);
+    }
+
+    if (privateRooms.has(roomId)) {
+      const partnerSocketId = privateRooms.get(roomId);
+      if (partnerSocketId === socket.id) return;
+
+      privateRooms.delete(roomId);
+      pairUsers(socket.id, partnerSocketId);
+    } else {
+      privateRooms.set(roomId, socket.id);
+      socket.emit('waiting');
+      console.log(`⏳ Private match waiting in room ${roomId} for: ${socket.id} (User: ${targetUsername})`);
+    }
+  });
+
+  // Follow Realtime updates
+  socket.on('follow_request', ({ targetUsername }) => {
+    const sender = socket.user?.username;
+    if (!sender || sender === targetUsername) return;
+
+    const targetSocketId = onlineUsers.get(targetUsername);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('follow_request_incoming', { senderUsername: sender });
+    }
+  });
+
+  socket.on('follow_accept', ({ targetUsername }) => {
+    const accepter = socket.user?.username;
+    if (!accepter) return;
+
+    const targetSocketId = onlineUsers.get(targetUsername);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('follow_accepted_incoming', { accepterUsername: accepter });
+      io.to(targetSocketId).emit('follow_update');
+    }
+  });
+
+  // Direct calls
+  socket.on('private_invite', async ({ targetUsername }) => {
+    const sender = socket.user?.username;
+    if (!sender || sender === targetUsername) return;
+
+    const targetSocketId = onlineUsers.get(targetUsername);
+    const roomId = `private_${Math.random().toString(36).substring(2, 9)}`;
+    const notif = await db.createNotification(targetUsername, sender, 'invite', roomId);
+
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('private_invite_incoming', {
+        id: notif.id,
+        senderUsername: sender,
+        roomId
+      });
+    }
+  });
+
+  socket.on('private_invite_accept', ({ targetUsername, roomId }) => {
+    const accepter = socket.user?.username;
+    if (!accepter) return;
+
+    const targetSocketId = onlineUsers.get(targetUsername);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('private_invite_accepted', {
+        accepterUsername: accepter,
+        roomId
+      });
     }
   });
 
@@ -738,6 +1108,17 @@ io.on('connection', async (socket) => {
     disconnectFromPartner(socket.id);
     removeFromQueue(socket.id);
     users.delete(socket.id);
+    
+    if (socket.user && !socket.user.isAnonymous) {
+      onlineUsers.delete(socket.user.username);
+    }
+
+    for (const [roomId, socketId] of privateRooms.entries()) {
+      if (socketId === socket.id) {
+        privateRooms.delete(roomId);
+      }
+    }
+    
     console.log(`🔴 Disconnected: ${socket.id} | Total: ${totalOnline}`);
   });
 });

@@ -8,7 +8,8 @@ import ChatPanel from './ChatPanel';
 import MatchingFilters from './MatchingFilters';
 import ReportModal from './ReportModal';
 import TermsModal from './TermsModal';
-import { Video, MessageSquare, Volume2, VideoOff, MicOff, RefreshCw, Square, ShieldAlert } from 'lucide-react';
+import PeerProfileCard from './PeerProfileCard';
+import { Video, MessageSquare, Volume2, VideoOff, MicOff, RefreshCw, Square, ShieldAlert, UserCheck, PhoneCall } from 'lucide-react';
 
 interface Message {
   id: string;
@@ -34,6 +35,8 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
   const router = useRouter();
   const [showTerms, setShowTerms] = useState(false);
   const [username, setUsername] = useState('');
+  const [partnerUsername, setPartnerUsername] = useState<string | null>(null);
+  const [currentUser, setCurrentUser] = useState<any>(null);
 
   useEffect(() => {
     const accepted = localStorage.getItem('ghostchat_terms_accepted') === 'true';
@@ -53,6 +56,7 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
       const parsed = JSON.parse(stored);
       if (parsed?.username) {
         setUsername(parsed.username);
+        setCurrentUser(parsed);
       } else {
         router.push('/');
       }
@@ -86,6 +90,8 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
   const [reportOpen, setReportOpen] = useState(false);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [isOfflineSim, setIsOfflineSim] = useState(false);
+  const [incomingFollowRequest, setIncomingFollowRequest] = useState<string | null>(null);
+  const [incomingInvite, setIncomingInvite] = useState<{ senderUsername: string; roomId: string } | null>(null);
 
   // --- Viewport Resize Adjustments ---
   const [viewportHeight, setViewportHeight] = useState('100vh');
@@ -184,6 +190,15 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
       console.log('✅ Connected to signaling server');
       setIsOfflineSim(false);
       appendSystemMessage('Connected to server. Ready to match.');
+
+      // Auto join private room if parameter exists
+      const urlParams = new URLSearchParams(window.location.search);
+      const roomParam = urlParams.get('room');
+      if (roomParam) {
+        socket.emit('join_private_room', { roomId: roomParam, username });
+        setIsMatching(true);
+        appendSystemMessage(`Connecting to private room: ${roomParam}...`);
+      }
     });
 
     socket.on('connect_error', () => {
@@ -198,11 +213,12 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
       appendSystemMessage('Searching for a match matching your preferences...');
     });
 
-    socket.on('matched', async ({ initiator, partnerId }: { initiator: boolean; partnerId: string }) => {
-      console.log(`Matched with peer: ${partnerId}. Initiator: ${initiator}`);
+    socket.on('matched', async ({ initiator, partnerId, partnerUsername }: { initiator: boolean; partnerId: string; partnerUsername?: string }) => {
+      console.log(`Matched with peer: ${partnerId}. Initiator: ${initiator} | Username: ${partnerUsername}`);
       setIsMatching(false);
       setIsConnected(true);
       setMessages([]);
+      setPartnerUsername(partnerUsername || null);
       appendSystemMessage('You are paired with a stranger! Say hello.');
 
       // Clear previous peer connection
@@ -301,6 +317,23 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
       appendSystemMessage('Session stopped.');
     });
 
+    socket.on('private_invite_accepted', ({ roomId }) => {
+      appendSystemMessage('Invitation accepted! Directing to private room...');
+      router.push(`/chat?room=${roomId}&mode=video`);
+    });
+
+    socket.on('follow_request_incoming', ({ senderUsername }) => {
+      setIncomingFollowRequest(senderUsername);
+    });
+
+    socket.on('follow_accepted_incoming', ({ accepterUsername }) => {
+      appendSystemMessage(`@${accepterUsername} accepted your follow request!`);
+    });
+
+    socket.on('private_invite_incoming', ({ senderUsername, roomId }) => {
+      setIncomingInvite({ senderUsername, roomId });
+    });
+
     return () => {
       cleanPeerConnection();
       socket.disconnect();
@@ -313,6 +346,43 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
       peerRef.current = null;
     }
     setRemoteStream(null);
+    setPartnerUsername(null);
+  };
+
+  const handleAcceptFollowIncoming = async () => {
+    if (!incomingFollowRequest) return;
+    const token = localStorage.getItem('ghostchat_token');
+    if (!token) return;
+
+    try {
+      const res = await fetch(`${serverUrl}/api/follow/accept`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ targetUsername: incomingFollowRequest })
+      });
+      if (res.ok) {
+        socketRef.current?.emit('follow_accept', { targetUsername: incomingFollowRequest });
+        appendSystemMessage(`You are now following @${incomingFollowRequest}!`);
+      }
+    } catch (err) {
+      console.error('Failed to accept follow request:', err);
+    } finally {
+      setIncomingFollowRequest(null);
+    }
+  };
+
+  const handleAcceptInviteIncoming = () => {
+    if (!incomingInvite) return;
+    socketRef.current?.emit('private_invite_accept', {
+      targetUsername: incomingInvite.senderUsername,
+      roomId: incomingInvite.roomId
+    });
+    const targetRoom = incomingInvite.roomId;
+    setIncomingInvite(null);
+    router.push(`/chat?room=${targetRoom}&mode=video`);
   };
 
   const handleBackToHome = () => {
@@ -351,13 +421,19 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
     if (isOfflineSim) {
       simulateOfflineMatch();
     } else {
-      socketRef.current?.emit('find_stranger', {
-        interests,
-        language,
-        country,
-        mode: chatMode,
-        username
-      });
+      const urlParams = new URLSearchParams(window.location.search);
+      const roomParam = urlParams.get('room');
+      if (roomParam) {
+        socketRef.current?.emit('join_private_room', { roomId: roomParam, username });
+      } else {
+        socketRef.current?.emit('find_stranger', {
+          interests,
+          language,
+          country,
+          mode: chatMode,
+          username
+        });
+      }
     }
   };
 
@@ -621,6 +697,17 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
             isConnected={isConnected}
           />
         </div>
+
+        {/* Peer Profile slide-in panel */}
+        {isConnected && partnerUsername && (
+          <div className="w-full lg:w-72 h-[350px] lg:h-auto shrink-0 animate-in slide-in-from-right duration-200">
+            <PeerProfileCard
+              partnerUsername={partnerUsername}
+              serverUrl={serverUrl}
+              socket={socketRef.current}
+            />
+          </div>
+        )}
       </div>
 
       {/* Report Abuse Overlay */}
@@ -635,6 +722,72 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
         isOpen={showTerms}
         onAccept={() => setShowTerms(false)}
       />
+
+      {/* Mid-call incoming follow request overlay */}
+      {incomingFollowRequest && (
+        <div className="fixed inset-0 z-200 flex items-center justify-center bg-black/80 backdrop-blur-xs p-4">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl border border-brand-gray-mid/30 text-center space-y-4 animate-in zoom-in-95 duration-200">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-blue-50 border border-blue-100 text-blue-600 animate-bounce">
+              <UserCheck size={24} />
+            </div>
+            
+            <div className="space-y-1.5">
+              <h4 className="font-extrabold text-brand-black text-lg">Follow Request</h4>
+              <p className="text-xs text-brand-black/60 leading-relaxed">
+                <strong className="font-extrabold text-brand-black">@{incomingFollowRequest}</strong> wants to follow you. Accepting will update follower metrics instantly.
+              </p>
+            </div>
+
+            <div className="flex gap-3 pt-2">
+              <button
+                onClick={handleAcceptFollowIncoming}
+                className="flex-1 rounded-xl bg-brand-black py-2.5 text-xs font-bold uppercase tracking-wider text-white transition-all hover:bg-brand-black/90 active:scale-95 cursor-pointer"
+              >
+                Accept
+              </button>
+              <button
+                onClick={() => setIncomingFollowRequest(null)}
+                className="rounded-xl border border-brand-gray-mid/60 px-5 py-2.5 text-xs font-bold uppercase tracking-wider text-brand-black hover:bg-brand-gray-light cursor-pointer"
+              >
+                Decline
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mid-call incoming call invite overlay */}
+      {incomingInvite && (
+        <div className="fixed inset-0 z-200 flex items-center justify-center bg-black/80 backdrop-blur-xs p-4">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl border border-brand-gray-mid/30 text-center space-y-4 animate-in zoom-in-95 duration-200">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-50 border border-emerald-100 text-emerald-600 animate-pulse">
+              <PhoneCall size={24} />
+            </div>
+            
+            <div className="space-y-1.5">
+              <h4 className="font-extrabold text-brand-black text-lg">Incoming Call</h4>
+              <p className="text-xs text-brand-black/60 leading-relaxed">
+                <strong className="font-extrabold text-brand-black">@{incomingInvite.senderUsername}</strong> is inviting you to a private chat session right now.
+              </p>
+            </div>
+
+            <div className="flex gap-3 pt-2">
+              <button
+                onClick={handleAcceptInviteIncoming}
+                className="flex-grow rounded-xl bg-emerald-600 py-2.5 text-xs font-bold uppercase tracking-wider text-white transition-all hover:bg-emerald-700 active:scale-95 cursor-pointer"
+              >
+                Accept and Join
+              </button>
+              <button
+                onClick={() => setIncomingInvite(null)}
+                className="rounded-xl border border-brand-gray-mid/60 px-5 py-2.5 text-xs font-bold uppercase tracking-wider text-brand-black hover:bg-brand-gray-light cursor-pointer"
+              >
+                Ignore
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

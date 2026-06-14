@@ -12,7 +12,9 @@ const initialJsonDb = {
   bans: [],
   reports: [],
   feedbacks: [],
-  otp_verifications: []
+  otp_verifications: [],
+  followers: [],
+  notifications: []
 };
 
 // Load JSON DB
@@ -24,9 +26,15 @@ function readJsonDb() {
     }
     const data = fs.readFileSync(JSON_DB_PATH, 'utf8');
     const parsed = JSON.parse(data);
-    // Ensure nested array exists for backwards compatibility
+    // Ensure nested arrays exist for backwards compatibility
     if (!parsed.otp_verifications) {
       parsed.otp_verifications = [];
+    }
+    if (!parsed.followers) {
+      parsed.followers = [];
+    }
+    if (!parsed.notifications) {
+      parsed.notifications = [];
     }
     return parsed;
   } catch (err) {
@@ -85,6 +93,38 @@ async function initDb() {
       `);
       await pool.query(`
         ALTER TABLE users ADD COLUMN IF NOT EXISTS deletion_hold_until TIMESTAMP;
+      `);
+      await pool.query(`
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS nickname VARCHAR(100);
+      `);
+      await pool.query(`
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT;
+      `);
+      await pool.query(`
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_img TEXT;
+      `);
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS followers (
+          id SERIAL PRIMARY KEY,
+          follower_username VARCHAR(50) NOT NULL,
+          following_username VARCHAR(50) NOT NULL,
+          status VARCHAR(20) DEFAULT 'pending',
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(follower_username, following_username)
+        );
+      `);
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS notifications (
+          id SERIAL PRIMARY KEY,
+          recipient_username VARCHAR(50) NOT NULL,
+          sender_username VARCHAR(50) NOT NULL,
+          type VARCHAR(50) NOT NULL,
+          status VARCHAR(20) DEFAULT 'unread',
+          details TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
       `);
 
       await pool.query(`
@@ -205,6 +245,9 @@ const db = {
         password: hashedPassword,
         role,
         deletion_hold_until: null,
+        nickname: '',
+        bio: '',
+        profile_img: '',
         created_at: new Date().toISOString()
       };
       data.users.push(newUser);
@@ -455,6 +498,252 @@ const db = {
       data.feedbacks.push(newFeedback);
       writeJsonDb(data);
       return newFeedback;
+    }
+  },
+
+  // --- PROFILE UPDATES ---
+  async updateUserProfile(username, nickname, bio, profile_img) {
+    if (usePostgres) {
+      const res = await pool.query(
+        'UPDATE users SET nickname = $2, bio = $3, profile_img = $4 WHERE username = $1 RETURNING *',
+        [username, nickname, bio, profile_img]
+      );
+      return res.rows[0];
+    } else {
+      const data = readJsonDb();
+      const idx = data.users.findIndex(u => u.username === username);
+      if (idx !== -1) {
+        data.users[idx].nickname = nickname || '';
+        data.users[idx].bio = bio || '';
+        data.users[idx].profile_img = profile_img || '';
+        writeJsonDb(data);
+        return data.users[idx];
+      }
+      return null;
+    }
+  },
+
+  // --- FOLLOW SYSTEM ---
+  async getFollowRelationship(follower, following) {
+    if (usePostgres) {
+      const res = await pool.query(
+        'SELECT * FROM followers WHERE follower_username = $1 AND following_username = $2',
+        [follower, following]
+      );
+      return res.rows[0];
+    } else {
+      const data = readJsonDb();
+      return data.followers.find(f => f.follower_username === follower && f.following_username === following);
+    }
+  },
+
+  async sendFollowRequest(follower, following) {
+    const status = 'pending';
+    if (usePostgres) {
+      const res = await pool.query(
+        'INSERT INTO followers (follower_username, following_username, status) VALUES ($1, $2, $3) ON CONFLICT (follower_username, following_username) DO UPDATE SET status = EXCLUDED.status RETURNING *',
+        [follower, following, status]
+      );
+      return res.rows[0];
+    } else {
+      const data = readJsonDb();
+      let f = data.followers.find(x => x.follower_username === follower && x.following_username === following);
+      if (f) {
+        f.status = status;
+      } else {
+        f = {
+          id: data.followers.length + 1,
+          follower_username: follower,
+          following_username: following,
+          status,
+          created_at: new Date().toISOString()
+        };
+        data.followers.push(f);
+      }
+      writeJsonDb(data);
+      return f;
+    }
+  },
+
+  async acceptFollowRequest(follower, following) {
+    const status = 'accepted';
+    if (usePostgres) {
+      const res = await pool.query(
+        'UPDATE followers SET status = $3 WHERE follower_username = $1 AND following_username = $2 RETURNING *',
+        [follower, following, status]
+      );
+      return res.rows[0];
+    } else {
+      const data = readJsonDb();
+      const f = data.followers.find(x => x.follower_username === follower && x.following_username === following);
+      if (f) {
+        f.status = status;
+        writeJsonDb(data);
+        return f;
+      }
+      return null;
+    }
+  },
+
+  async unfollowUser(follower, following) {
+    if (usePostgres) {
+      await pool.query(
+        'DELETE FROM followers WHERE follower_username = $1 AND following_username = $2',
+        [follower, following]
+      );
+    } else {
+      const data = readJsonDb();
+      data.followers = data.followers.filter(x => !(x.follower_username === follower && x.following_username === following));
+      writeJsonDb(data);
+    }
+  },
+
+  async getFollowersCount(username) {
+    if (usePostgres) {
+      const res = await pool.query(
+        "SELECT count(*) FROM followers WHERE following_username = $1 AND status = 'accepted'",
+        [username]
+      );
+      return parseInt(res.rows[0].count, 10);
+    } else {
+      const data = readJsonDb();
+      return data.followers.filter(x => x.following_username === username && x.status === 'accepted').length;
+    }
+  },
+
+  async getFollowingCount(username) {
+    if (usePostgres) {
+      const res = await pool.query(
+        "SELECT count(*) FROM followers WHERE follower_username = $1 AND status = 'accepted'",
+        [username]
+      );
+      return parseInt(res.rows[0].count, 10);
+    } else {
+      const data = readJsonDb();
+      return data.followers.filter(x => x.follower_username === username && x.status === 'accepted').length;
+    }
+  },
+
+  async getFollowers(username) {
+    if (usePostgres) {
+      const res = await pool.query(
+        `SELECT u.username, u.nickname, u.bio, u.profile_img 
+         FROM users u 
+         JOIN followers f ON u.username = f.follower_username 
+         WHERE f.following_username = $1 AND f.status = 'accepted'`,
+        [username]
+      );
+      return res.rows;
+    } else {
+      const data = readJsonDb();
+      const followerNames = data.followers
+        .filter(x => x.following_username === username && x.status === 'accepted')
+        .map(x => x.follower_username);
+      return data.users
+        .filter(u => followerNames.includes(u.username))
+        .map(u => ({ username: u.username, nickname: u.nickname || '', bio: u.bio || '', profile_img: u.profile_img || '' }));
+    }
+  },
+
+  async getFollowing(username) {
+    if (usePostgres) {
+      const res = await pool.query(
+        `SELECT u.username, u.nickname, u.bio, u.profile_img 
+         FROM users u 
+         JOIN followers f ON u.username = f.following_username 
+         WHERE f.follower_username = $1 AND f.status = 'accepted'`,
+        [username]
+      );
+      return res.rows;
+    } else {
+      const data = readJsonDb();
+      const followingNames = data.followers
+        .filter(x => x.follower_username === username && x.status === 'accepted')
+        .map(x => x.following_username);
+      return data.users
+        .filter(u => followingNames.includes(u.username))
+        .map(u => ({ username: u.username, nickname: u.nickname || '', bio: u.bio || '', profile_img: u.profile_img || '' }));
+    }
+  },
+
+  // --- NOTIFICATIONS SYSTEM ---
+  async createNotification(recipient, sender, type, details = '') {
+    if (usePostgres) {
+      const res = await pool.query(
+        'INSERT INTO notifications (recipient_username, sender_username, type, status, details) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+        [recipient, sender, type, 'unread', details]
+      );
+      return res.rows[0];
+    } else {
+      const data = readJsonDb();
+      const newNotif = {
+        id: data.notifications.length + 1,
+        recipient_username: recipient,
+        sender_username: sender,
+        type,
+        status: 'unread',
+        details,
+        created_at: new Date().toISOString()
+      };
+      data.notifications.push(newNotif);
+      writeJsonDb(data);
+      return newNotif;
+    }
+  },
+
+  async getNotifications(recipient) {
+    if (usePostgres) {
+      const res = await pool.query(
+        'SELECT * FROM notifications WHERE recipient_username = $1 ORDER BY created_at DESC',
+        [recipient]
+      );
+      return res.rows;
+    } else {
+      const data = readJsonDb();
+      return data.notifications
+        .filter(n => n.recipient_username === recipient)
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    }
+  },
+
+  async markNotificationsRead(recipient) {
+    if (usePostgres) {
+      await pool.query(
+        "UPDATE notifications SET status = 'read' WHERE recipient_username = $1",
+        [recipient]
+      );
+    } else {
+      const data = readJsonDb();
+      data.notifications.forEach(n => {
+        if (n.recipient_username === recipient) n.status = 'read';
+      });
+      writeJsonDb(data);
+    }
+  },
+
+  async deleteNotification(id) {
+    const nid = parseInt(id, 10);
+    if (usePostgres) {
+      await pool.query('DELETE FROM notifications WHERE id = $1', [nid]);
+    } else {
+      const data = readJsonDb();
+      data.notifications = data.notifications.filter(n => n.id !== nid);
+      writeJsonDb(data);
+    }
+  },
+
+  async deleteFollowRequestNotification(sender, recipient) {
+    if (usePostgres) {
+      await pool.query(
+        "DELETE FROM notifications WHERE sender_username = $1 AND recipient_username = $2 AND type = 'follow_request'",
+        [sender, recipient]
+      );
+    } else {
+      const data = readJsonDb();
+      data.notifications = data.notifications.filter(
+        n => !(n.sender_username === sender && n.recipient_username === recipient && n.type === 'follow_request')
+      );
+      writeJsonDb(data);
     }
   }
 };

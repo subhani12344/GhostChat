@@ -3,6 +3,9 @@ import Link from 'next/link';
 import Logo from './Logo';
 import { User, Users } from 'lucide-react';
 import AnonymousModal from './AnonymousModal';
+import NotificationCenter from './NotificationCenter';
+import ProfileDrawer from './ProfileDrawer';
+import { Socket } from 'socket.io-client';
 
 interface NavbarProps {
   onlineCount: number;
@@ -11,6 +14,7 @@ interface NavbarProps {
   onLogout: () => void;
   showChatLink?: boolean;
   onAuthSuccess?: (user: { username: string }) => void;
+  socket?: Socket | null;
 }
 
 export default function Navbar({
@@ -19,9 +23,11 @@ export default function Navbar({
   onAuthClick,
   onLogout,
   showChatLink = true,
-  onAuthSuccess
+  onAuthSuccess,
+  socket = null
 }: NavbarProps) {
   const [anonOpen, setAnonOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const serverUrl = process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:4000';
 
   return (
@@ -51,12 +57,26 @@ export default function Navbar({
           {/* User Auth Section */}
           {user ? (
             <div className="flex items-center gap-2 sm:gap-3.5">
-              <div className="hidden items-center gap-1.5 text-sm sm:flex">
-                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-brand-black text-white text-xs font-bold uppercase">
+              {/* Notifications bell dropdown */}
+              <NotificationCenter
+                serverUrl={serverUrl}
+                socket={socket || null}
+                currentUser={user}
+              />
+
+              {/* Clickable Username Profile trigger */}
+              <div
+                onClick={() => setProfileOpen(true)}
+                className="flex items-center gap-1.5 text-sm cursor-pointer hover:opacity-85 transition-opacity"
+              >
+                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-brand-black text-white text-xs font-bold uppercase select-none">
                   {user.username.charAt(0)}
                 </div>
-                <span className="font-medium text-brand-black">{user.username}</span>
+                <span className="font-semibold text-brand-black hidden sm:inline select-none">
+                  {user.username}
+                </span>
               </div>
+
               <button
                 onClick={onLogout}
                 className="rounded-full border border-brand-black px-3 sm:px-4 py-1.5 text-xs font-bold uppercase tracking-wider text-brand-black transition-all hover:bg-brand-black hover:text-white cursor-pointer font-bold"
@@ -86,7 +106,18 @@ export default function Navbar({
         }}
         serverUrl={serverUrl}
       />
+
+      <ProfileDrawer
+        isOpen={profileOpen}
+        onClose={() => setProfileOpen(false)}
+        currentUser={user}
+        serverUrl={serverUrl}
+        socket={socket || null}
+        onLogout={onLogout}
+        onProfileUpdate={onAuthSuccess}
+      />
     </header>
   );
 }
+
 
