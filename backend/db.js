@@ -71,10 +71,16 @@ async function initDb() {
         CREATE TABLE IF NOT EXISTS users (
           id SERIAL PRIMARY KEY,
           username VARCHAR(50) UNIQUE NOT NULL,
+          email VARCHAR(100) UNIQUE,
           password VARCHAR(255) NOT NULL,
           role VARCHAR(20) DEFAULT 'user',
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+      `);
+
+      // Ensure existing database has the email column
+      await pool.query(`
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(100) UNIQUE;
       `);
 
       await pool.query(`
@@ -150,24 +156,20 @@ const db = {
   },
 
   async getUserByEmail(email) {
-    // For registration check
     if (usePostgres) {
-      // In PostgreSQL we didn't add email to users initially, so we check otp_verifications and mock if unlisted
-      const res = await pool.query('SELECT * FROM otp_verifications WHERE email = $1', [email]);
-      return res.rows.length > 0;
+      const res = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+      return res.rows[0] || null;
     } else {
       const data = readJsonDb();
-      // Since user profiles only have username, we check verification logs to prevent duplicate email accounts
-      const inOtp = data.otp_verifications.find(o => o.email === email);
-      return !!inOtp;
+      return data.users.find(u => u.email === email) || null;
     }
   },
 
-  async createUser(username, hashedPassword, role = 'user') {
+  async createUser(username, email, hashedPassword, role = 'user') {
     if (usePostgres) {
       const res = await pool.query(
-        'INSERT INTO users (username, password, role) VALUES ($1, $2, $3) RETURNING *',
-        [username, hashedPassword, role]
+        'INSERT INTO users (username, email, password, role) VALUES ($1, $2, $3, $4) RETURNING *',
+        [username, email, hashedPassword, role]
       );
       return res.rows[0];
     } else {
@@ -175,6 +177,7 @@ const db = {
       const newUser = {
         id: data.users.length + 1,
         username,
+        email,
         password: hashedPassword,
         role,
         created_at: new Date().toISOString()

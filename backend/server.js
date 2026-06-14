@@ -5,7 +5,8 @@ const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer');
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 const { db, initDb } = require('./db');
 
@@ -85,6 +86,12 @@ app.post('/api/auth/register-request', async (req, res) => {
       return res.status(400).json({ message: 'Username is already taken' });
     }
 
+    // Check if email already registered to an account
+    const existingEmail = await db.getUserByEmail(email);
+    if (existingEmail) {
+      return res.status(400).json({ message: 'Email address is already registered to another account' });
+    }
+
     // Check if email has active lockout
     const existingVerification = await db.getOtpVerification(email);
     if (existingVerification && existingVerification.locked_until) {
@@ -146,7 +153,7 @@ app.post('/api/auth/verify-otp', async (req, res) => {
     }
 
     // Complete User Creation
-    const newUser = await db.createUser(record.username, record.password, 'user');
+    const newUser = await db.createUser(record.username, email, record.password, 'user');
 
     // Clean up OTP record
     await db.deleteOtpVerification(email);
@@ -404,9 +411,13 @@ io.on('connection', async (socket) => {
   console.log(`🟢 Connected: ${socket.id} (${ip}) | Total: ${totalOnline}`);
 
   // Find Stranger matching
-  socket.on('find_stranger', ({ interests = [], language = 'all', country = 'all', mode = 'video' }) => {
+  socket.on('find_stranger', ({ interests = [], language = 'all', country = 'all', mode = 'video', username }) => {
     const user = users.get(socket.id);
     if (!user) return;
+
+    if (username) {
+      user.username = username;
+    }
 
     if (user.partner) {
       disconnectFromPartner(socket.id);

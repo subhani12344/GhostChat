@@ -33,11 +33,24 @@ const ICE_SERVERS = {
 export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
   const router = useRouter();
   const [showTerms, setShowTerms] = useState(false);
+  const [username, setUsername] = useState('');
 
   useEffect(() => {
     const accepted = localStorage.getItem('ghostchat_terms_accepted') === 'true';
     if (!accepted) {
       setShowTerms(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    const stored = localStorage.getItem('ghostchat_user');
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        if (parsed?.username) {
+          setUsername(parsed.username);
+        }
+      } catch (err) {}
     }
   }, []);
 
@@ -334,7 +347,8 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
         interests,
         language,
         country,
-        mode: chatMode
+        mode: chatMode,
+        username
       });
     }
   };

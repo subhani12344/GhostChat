@@ -244,14 +244,7 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, serverUrl }:
     }
   };
 
-  const handleGuestAccess = () => {
-    const randomGuest = 'Guest_' + Math.floor(1000 + Math.random() * 9000);
-    const mockToken = 'guest_token_' + Math.random().toString(36).substr(2);
-    localStorage.setItem('ghostchat_token', mockToken);
-    localStorage.setItem('ghostchat_user', JSON.stringify({ username: randomGuest }));
-    onAuthSuccess({ username: randomGuest, token: mockToken });
-    onClose();
-  };
+
 
   // Helper: Format timer seconds to MM:SS
   const formatTime = (seconds: number) => {
@@ -358,7 +351,7 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, serverUrl }:
               </button>
             </form>
 
-            <div className="mt-4 flex items-center justify-between text-xs text-brand-black/60 border-t border-brand-gray-mid/30 pt-4">
+            <div className="mt-4 flex items-center justify-center text-xs text-brand-black/60 border-t border-brand-gray-mid/30 pt-4 w-full">
               <button
                 onClick={() => {
                   setIsLogin(!isLogin);
@@ -367,13 +360,6 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, serverUrl }:
                 className="hover:text-brand-black underline font-medium"
               >
                 {isLogin ? 'Need an account? Sign Up' : 'Already have an account? Login'}
-              </button>
-
-              <button
-                onClick={handleGuestAccess}
-                className="hover:text-brand-black underline font-bold uppercase tracking-wide"
-              >
-                Enter as Guest
               </button>
             </div>
           </>
