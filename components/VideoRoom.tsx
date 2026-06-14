@@ -725,7 +725,7 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
 
       {/* Mid-call incoming follow request overlay */}
       {incomingFollowRequest && (
-        <div className="fixed inset-0 z-200 flex items-center justify-center bg-black/80 backdrop-blur-xs p-4">
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-xs p-4">
           <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl border border-brand-gray-mid/30 text-center space-y-4 animate-in zoom-in-95 duration-200">
             <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-blue-50 border border-blue-100 text-blue-600 animate-bounce">
               <UserCheck size={24} />
@@ -758,7 +758,7 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
 
       {/* Mid-call incoming call invite overlay */}
       {incomingInvite && (
-        <div className="fixed inset-0 z-200 flex items-center justify-center bg-black/80 backdrop-blur-xs p-4">
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-xs p-4">
           <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl border border-brand-gray-mid/30 text-center space-y-4 animate-in zoom-in-95 duration-200">
             <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-50 border border-emerald-100 text-emerald-600 animate-pulse">
               <PhoneCall size={24} />

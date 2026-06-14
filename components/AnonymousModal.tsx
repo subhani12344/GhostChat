@@ -55,7 +55,7 @@ export default function AnonymousModal({ isOpen, onClose, onSuccess, serverUrl }
   };
 
   return (
-    <div className="fixed inset-0 z-100 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4 backdrop-blur-md animate-in fade-in duration-200">
       <div className="relative w-full max-w-md rounded-2xl bg-white p-6 md:p-8 shadow-2xl border border-brand-gray-mid/30 animate-in zoom-in-95 duration-200 flex flex-col">
         
         {/* Close button */}

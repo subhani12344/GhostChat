@@ -37,7 +37,7 @@ export default function TermsModal({ isOpen, onAccept }: TermsModalProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-100 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4 backdrop-blur-md animate-in fade-in duration-200">
       <div className="relative w-full max-w-2xl rounded-2xl bg-white p-6 md:p-8 shadow-2xl border border-brand-gray-mid/30 animate-in zoom-in-95 duration-200 flex flex-col max-h-[85vh]">
         
         {/* Header */}
