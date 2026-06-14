@@ -12,8 +12,7 @@ import { Shield, Sparkles, MessageSquare, Globe, Smartphone, Zap } from 'lucide-
 
 export default function Home() {
   const router = useRouter();
-  const [onlineCount, setOnlineCount] = useState(14280);
-  const [displayCount, setDisplayCount] = useState(14285);
+  const [onlineCount, setOnlineCount] = useState(0);
   const [user, setUser] = useState<{ username: string } | null>(null);
   const [authOpen, setAuthOpen] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
@@ -33,45 +32,32 @@ export default function Home() {
     const storedUser = localStorage.getItem('ghostchat_user');
     if (storedUser) setUser(JSON.parse(storedUser));
 
-    // Fetch active counts and start 10s poll
+    // Fetch active counts and start 2s poll
     const fetchOnlineCount = () => {
       fetch(`${serverUrl}/health`)
         .then((res) => res.json())
         .then((data) => {
-          const actualOnline = data.online || 0;
-          setOnlineCount(14280 + actualOnline);
+          setOnlineCount(data.online || 0);
         })
         .catch(() => {
-          setOnlineCount(14285);
+          setOnlineCount(0);
         });
     };
 
     fetchOnlineCount();
-    const intervalId = setInterval(fetchOnlineCount, 10000);
+    const intervalId = setInterval(fetchOnlineCount, 2000);
 
     return () => clearInterval(intervalId);
   }, [serverUrl]);
 
-  // Sync displayCount to base onlineCount when base updates
-  useEffect(() => {
-    setDisplayCount(onlineCount);
-  }, [onlineCount]);
-
-  // Extremely fast dynamic counter ticker effect
-  useEffect(() => {
-    const tickerInterval = setInterval(() => {
-      const change = Math.floor(Math.random() * 5) - 2;
-      setDisplayCount((prev) => {
-        const next = prev + change;
-        if (Math.abs(next - onlineCount) > 10) {
-          return onlineCount;
-        }
-        return next;
-      });
-    }, 1500);
-
-    return () => clearInterval(tickerInterval);
-  }, [onlineCount]);
+  const handleAnonymousChat = () => {
+    const randomGuest = 'Guest_' + Math.floor(1000 + Math.random() * 9000);
+    const mockToken = 'guest_token_' + Math.random().toString(36).substring(2);
+    localStorage.setItem('ghostchat_token', mockToken);
+    localStorage.setItem('ghostchat_user', JSON.stringify({ username: randomGuest }));
+    setUser({ username: randomGuest });
+    router.push('/chat?mode=video');
+  };
 
   const handleChatStart = (targetPath: string) => {
     if (user) {
@@ -85,7 +71,7 @@ export default function Home() {
   return (
     <div className="flex min-h-screen flex-col bg-white">
       <Navbar
-        onlineCount={displayCount}
+        onlineCount={onlineCount}
         user={user}
         onAuthClick={() => setAuthOpen(true)}
         onLogout={() => {
@@ -93,6 +79,7 @@ export default function Home() {
           localStorage.removeItem('ghostchat_user');
           setUser(null);
         }}
+        onAnonymousChatClick={handleAnonymousChat}
       />
 
       {/* Hero Section */}
