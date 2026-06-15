@@ -191,7 +191,7 @@ const db = {
   // --- USERS ---
   async getUserByUsername(username) {
     if (usePostgres) {
-      const res = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
+      const res = await pool.query('SELECT * FROM users WHERE LOWER(username) = LOWER($1)', [username]);
       const user = res.rows[0];
       if (user) {
         const pruned = await db.pruneExpiredDeletion(user);
@@ -200,7 +200,7 @@ const db = {
       return user;
     } else {
       const data = readJsonDb();
-      const user = data.users.find(u => u.username === username);
+      const user = data.users.find(u => u.username.toLowerCase() === username.toLowerCase());
       if (user) {
         const pruned = await db.pruneExpiredDeletion(user);
         if (pruned) return null;
@@ -211,7 +211,7 @@ const db = {
 
   async getUserByEmail(email) {
     if (usePostgres) {
-      const res = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+      const res = await pool.query('SELECT * FROM users WHERE LOWER(email) = LOWER($1)', [email]);
       const user = res.rows[0];
       if (user) {
         const pruned = await db.pruneExpiredDeletion(user);
@@ -220,7 +220,7 @@ const db = {
       return user;
     } else {
       const data = readJsonDb();
-      const user = data.users.find(u => u.email === email);
+      const user = data.users.find(u => u.email.toLowerCase() === email.toLowerCase());
       if (user) {
         const pruned = await db.pruneExpiredDeletion(user);
         if (pruned) return null;
@@ -274,10 +274,10 @@ const db = {
   async setUserDeletionHold(username, holdUntil) {
     const holdUntilStr = holdUntil ? holdUntil.toISOString() : null;
     if (usePostgres) {
-      await pool.query('UPDATE users SET deletion_hold_until = $2 WHERE username = $1', [username, holdUntil]);
+      await pool.query('UPDATE users SET deletion_hold_until = $2 WHERE LOWER(username) = LOWER($1)', [username, holdUntil]);
     } else {
       const data = readJsonDb();
-      const idx = data.users.findIndex(u => u.username === username);
+      const idx = data.users.findIndex(u => u.username.toLowerCase() === username.toLowerCase());
       if (idx !== -1) {
         data.users[idx].deletion_hold_until = holdUntilStr;
         writeJsonDb(data);
@@ -309,11 +309,11 @@ const db = {
   // --- OTP VERIFICATION FLOW ---
   async getOtpVerification(email) {
     if (usePostgres) {
-      const res = await pool.query('SELECT * FROM otp_verifications WHERE email = $1', [email]);
+      const res = await pool.query('SELECT * FROM otp_verifications WHERE LOWER(email) = LOWER($1)', [email]);
       return res.rows[0];
     } else {
       const data = readJsonDb();
-      return data.otp_verifications.find(o => o.email === email);
+      return data.otp_verifications.find(o => o.email.toLowerCase() === email.toLowerCase());
     }
   },
 
@@ -329,7 +329,7 @@ const db = {
       return res.rows[0];
     } else {
       const data = readJsonDb();
-      data.otp_verifications = data.otp_verifications.filter(o => o.email !== email);
+      data.otp_verifications = data.otp_verifications.filter(o => o.email.toLowerCase() !== email.toLowerCase());
       const newOtp = {
         id: data.otp_verifications.length + 1,
         email,
@@ -353,13 +353,13 @@ const db = {
       const res = await pool.query(`
         UPDATE otp_verifications
         SET otp_code = $2, expires_at = $3, resend_count = $4, locked_until = $5
-        WHERE email = $1
+        WHERE LOWER(email) = LOWER($1)
         RETURNING *
       `, [email, otpCode, expiresAt, resendCount, lockedUntil]);
       return res.rows[0];
     } else {
       const data = readJsonDb();
-      const idx = data.otp_verifications.findIndex(o => o.email === email);
+      const idx = data.otp_verifications.findIndex(o => o.email.toLowerCase() === email.toLowerCase());
       if (idx !== -1) {
         data.otp_verifications[idx].otp_code = otpCode;
         data.otp_verifications[idx].expires_at = expiresAt.toISOString();
@@ -374,10 +374,10 @@ const db = {
 
   async deleteOtpVerification(email) {
     if (usePostgres) {
-      await pool.query('DELETE FROM otp_verifications WHERE email = $1', [email]);
+      await pool.query('DELETE FROM otp_verifications WHERE LOWER(email) = LOWER($1)', [email]);
     } else {
       const data = readJsonDb();
-      data.otp_verifications = data.otp_verifications.filter(o => o.email !== email);
+      data.otp_verifications = data.otp_verifications.filter(o => o.email.toLowerCase() !== email.toLowerCase());
       writeJsonDb(data);
     }
   },
@@ -386,20 +386,20 @@ const db = {
   async isBanned(target) {
     if (usePostgres) {
       const res = await pool.query(
-        'SELECT * FROM bans WHERE target = $1 AND (expires_at IS NULL OR expires_at > NOW())',
+        'SELECT * FROM bans WHERE LOWER(target) = LOWER($1) AND (expires_at IS NULL OR expires_at > NOW())',
         [target]
       );
       return res.rows.length > 0 ? res.rows[0] : null;
     } else {
       const data = readJsonDb();
-      const ban = data.bans.find(b => b.target === target);
+      const ban = data.bans.find(b => b.target.toLowerCase() === target.toLowerCase());
       if (!ban) return null;
 
       if (ban.expires_at) {
         const isExpired = new Date(ban.expires_at) < new Date();
         if (isExpired) {
           // Clean up expired ban
-          data.bans = data.bans.filter(b => b.target !== target);
+          data.bans = data.bans.filter(b => b.target.toLowerCase() !== target.toLowerCase());
           writeJsonDb(data);
           return null;
         }
@@ -418,7 +418,7 @@ const db = {
     } else {
       const data = readJsonDb();
       // Remove existing ban if present
-      data.bans = data.bans.filter(b => b.target !== target);
+      data.bans = data.bans.filter(b => b.target.toLowerCase() !== target.toLowerCase());
       const newBan = {
         id: data.bans.length + 1,
         target,
@@ -505,13 +505,13 @@ const db = {
   async updateUserProfile(username, nickname, bio, profile_img) {
     if (usePostgres) {
       const res = await pool.query(
-        'UPDATE users SET nickname = $2, bio = $3, profile_img = $4 WHERE username = $1 RETURNING *',
+        'UPDATE users SET nickname = $2, bio = $3, profile_img = $4 WHERE LOWER(username) = LOWER($1) RETURNING *',
         [username, nickname, bio, profile_img]
       );
       return res.rows[0];
     } else {
       const data = readJsonDb();
-      const idx = data.users.findIndex(u => u.username === username);
+      const idx = data.users.findIndex(u => u.username.toLowerCase() === username.toLowerCase());
       if (idx !== -1) {
         data.users[idx].nickname = nickname || '';
         data.users[idx].bio = bio || '';

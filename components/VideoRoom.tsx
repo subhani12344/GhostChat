@@ -9,6 +9,7 @@ import MatchingFilters from './MatchingFilters';
 import ReportModal from './ReportModal';
 import TermsModal from './TermsModal';
 import PeerProfileCard from './PeerProfileCard';
+import AuthModal from './AuthModal';
 import { Video, MessageSquare, Volume2, VideoOff, MicOff, RefreshCw, Square, ShieldAlert, UserCheck, PhoneCall } from 'lucide-react';
 
 interface Message {
@@ -37,6 +38,8 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
   const [username, setUsername] = useState('');
   const [partnerUsername, setPartnerUsername] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<any>(null);
+  const [showMobileChat, setShowMobileChat] = useState(false);
+  const [authOpen, setAuthOpen] = useState(false);
 
   useEffect(() => {
     const accepted = localStorage.getItem('ghostchat_terms_accepted') === 'true';
@@ -385,6 +388,11 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
     router.push(`/chat?room=${targetRoom}&mode=video`);
   };
 
+  const handleAuthSuccess = (user: { username: string; token: string }) => {
+    setUsername(user.username);
+    setCurrentUser({ username: user.username });
+  };
+
   const handleBackToHome = () => {
     cleanPeerConnection();
     stopLocalTracks();
@@ -580,27 +588,43 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
   return (
     <div
       style={{ height: viewportHeight }}
-      className="flex w-full flex-col overflow-hidden bg-brand-gray-light p-3 md:p-6"
+      className={`flex w-full flex-col overflow-hidden bg-brand-gray-light ${
+        chatMode === 'video' ? 'p-0 lg:p-6' : 'p-3 md:p-6'
+      }`}
     >
-      <div className="mx-auto flex h-full w-full max-w-7xl flex-col lg:flex-row gap-4">
+      <div
+        className={`mx-auto flex h-full w-full max-w-7xl ${
+          chatMode === 'video'
+            ? 'flex-col lg:flex-row gap-0 lg:gap-6 relative'
+            : 'flex-col lg:flex-row gap-4'
+        }`}
+      >
         
         {/* LEFT COLUMN: Controls + Video Area */}
-        <div className="flex flex-1 flex-col gap-4">
+        <div
+          className={`flex flex-col ${
+            chatMode === 'video'
+              ? 'relative w-full lg:w-[calc(70%-12px)] h-full lg:h-full overflow-hidden'
+              : 'flex-1 gap-4'
+          }`}
+        >
           
           {/* Filters overlay */}
           {!isConnected && !isMatching && (
-            <MatchingFilters
-              interests={interests}
-              setInterests={setInterests}
-              language={language}
-              setLanguage={setLanguage}
-              country={country}
-              setCountry={setCountry}
-            />
+            <div className={chatMode === 'video' ? 'absolute top-4 left-4 right-4 z-30 lg:relative lg:top-auto lg:left-auto lg:right-auto lg:z-10' : ''}>
+              <MatchingFilters
+                interests={interests}
+                setInterests={setInterests}
+                language={language}
+                setLanguage={setLanguage}
+                country={country}
+                setCountry={setCountry}
+              />
+            </div>
           )}
 
           {/* Main Video tile */}
-          <div className="flex-1 min-h-[300px]">
+          <div className={chatMode === 'video' ? 'absolute inset-0 lg:relative lg:flex-1 w-full h-full lg:h-auto min-h-0' : 'flex-1 min-h-[300px]'}>
             <VideoTile
               localStream={localStream}
               remoteStream={remoteStream}
@@ -609,28 +633,44 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
               isConnected={isConnected}
               isMatching={isMatching}
               onReportClick={() => setReportOpen(true)}
+              onAuthClick={() => setAuthOpen(true)}
               chatMode={chatMode}
               partnerUsername={partnerUsername}
               serverUrl={serverUrl}
               socket={socketRef.current}
+              currentUser={currentUser}
             />
           </div>
 
           {/* Controls Bar */}
-          <div className="flex flex-wrap items-center justify-center gap-3 rounded-2xl border border-brand-gray-mid/60 bg-white p-3.5 shadow-xs">
+          <div
+            className={`transition-all duration-300 ${
+              chatMode === 'video'
+                ? 'absolute bottom-6 left-1/2 -translate-x-1/2 z-30 w-[90%] sm:w-auto flex flex-wrap items-center justify-center gap-3 rounded-2xl border border-white/10 bg-black/60 backdrop-blur-md p-3.5 shadow-xl text-white'
+                : 'flex flex-wrap items-center justify-center gap-3 rounded-2xl border border-brand-gray-mid/60 bg-white p-3.5 shadow-xs text-brand-black'
+            }`}
+          >
             {/* Start / Stop matching */}
             {!isConnected && !isMatching ? (
               <div className="flex items-center gap-2">
                 <button
                   onClick={handleStartChat}
-                  className="flex items-center gap-1.5 rounded-xl bg-brand-black px-6 py-3 text-xs font-bold uppercase tracking-wider text-white transition-all hover:bg-brand-black/90 active:scale-95 shadow-sm"
+                  className={`flex items-center gap-1.5 rounded-xl px-6 py-3 text-xs font-bold uppercase tracking-wider transition-all active:scale-95 shadow-sm cursor-pointer ${
+                    chatMode === 'video'
+                      ? 'bg-white text-brand-black hover:bg-white/95'
+                      : 'bg-brand-black text-white hover:bg-brand-black/95'
+                  }`}
                 >
                   <Video size={16} />
                   Start Chatting
                 </button>
                 <button
                   onClick={handleBackToHome}
-                  className="flex items-center gap-1.5 rounded-xl border border-brand-gray-mid/85 bg-white px-5 py-3 text-xs font-bold uppercase tracking-wider text-brand-black transition-all hover:bg-brand-gray-light active:scale-95"
+                  className={`flex items-center gap-1.5 rounded-xl border px-5 py-3 text-xs font-bold uppercase tracking-wider transition-all active:scale-95 cursor-pointer ${
+                    chatMode === 'video'
+                      ? 'border-white/20 bg-white/10 text-white hover:bg-white/20'
+                      : 'border-brand-gray-mid/85 bg-white text-brand-black hover:bg-brand-gray-light'
+                  }`}
                 >
                   Back to Home
                 </button>
@@ -639,21 +679,33 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
               <div className="flex items-center gap-2">
                 <button
                   onClick={handleNextStranger}
-                  className="flex items-center gap-1.5 rounded-xl bg-brand-black px-5 py-3 text-xs font-bold uppercase tracking-wider text-white transition-all hover:bg-brand-black/90 active:scale-95"
+                  className={`flex items-center gap-1.5 rounded-xl px-5 py-3 text-xs font-bold uppercase tracking-wider transition-all active:scale-95 cursor-pointer ${
+                    chatMode === 'video'
+                      ? 'bg-white text-brand-black hover:bg-white/95'
+                      : 'bg-brand-black text-white hover:bg-brand-black/95'
+                  }`}
                 >
                   <RefreshCw size={14} className="animate-spin-slow" />
                   Next Stranger
                 </button>
                 <button
                   onClick={handleStopChat}
-                  className="flex items-center gap-1.5 rounded-xl border border-brand-gray-mid/85 bg-white px-5 py-3 text-xs font-bold uppercase tracking-wider text-brand-black transition-all hover:bg-brand-gray-light active:scale-95"
+                  className={`flex items-center gap-1.5 rounded-xl border px-5 py-3 text-xs font-bold uppercase tracking-wider transition-all active:scale-95 cursor-pointer ${
+                    chatMode === 'video'
+                      ? 'border-white/20 bg-white/10 text-white hover:bg-white/20'
+                      : 'border-brand-gray-mid/85 bg-white text-brand-black hover:bg-brand-gray-light'
+                  }`}
                 >
                   <Square size={13} />
                   Stop
                 </button>
                 <button
                   onClick={handleBackToHome}
-                  className="flex items-center gap-1.5 rounded-xl border border-brand-gray-mid/85 bg-white px-5 py-3 text-xs font-bold uppercase tracking-wider text-brand-black transition-all hover:bg-brand-gray-light active:scale-95"
+                  className={`flex items-center gap-1.5 rounded-xl border px-5 py-3 text-xs font-bold uppercase tracking-wider transition-all active:scale-95 cursor-pointer ${
+                    chatMode === 'video'
+                      ? 'border-white/20 bg-white/10 text-white hover:bg-white/20'
+                      : 'border-brand-gray-mid/85 bg-white text-brand-black hover:bg-brand-gray-light'
+                  }`}
                 >
                   Back to Home
                 </button>
@@ -662,12 +714,12 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
 
             {/* Media Toggles (Video only) */}
             {chatMode === 'video' && (
-              <div className="flex items-center gap-2 border-l border-brand-gray-mid/40 pl-3">
+              <div className="flex items-center gap-2 border-l border-white/20 pl-3">
                 <button
                   onClick={handleToggleCam}
-                  className={`flex h-11 w-11 items-center justify-center rounded-xl transition-all active:scale-90 ${
+                  className={`flex h-11 w-11 items-center justify-center rounded-xl transition-all active:scale-90 cursor-pointer ${
                     isCamOn
-                      ? 'bg-brand-gray-light text-brand-black border border-brand-gray-mid/50'
+                      ? 'bg-white/10 border border-white/20 text-white hover:bg-white/20'
                       : 'bg-red-600 text-white shadow-xs'
                   }`}
                   title={isCamOn ? 'Turn Camera Off' : 'Turn Camera On'}
@@ -676,9 +728,9 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
                 </button>
                 <button
                   onClick={handleToggleMic}
-                  className={`flex h-11 w-11 items-center justify-center rounded-xl transition-all active:scale-90 ${
+                  className={`flex h-11 w-11 items-center justify-center rounded-xl transition-all active:scale-90 cursor-pointer ${
                     isMicOn
-                      ? 'bg-brand-gray-light text-brand-black border border-brand-gray-mid/50'
+                      ? 'bg-white/10 border border-white/20 text-white hover:bg-white/20'
                       : 'bg-red-600 text-white shadow-xs'
                   }`}
                   title={isMicOn ? 'Mute Microphone' : 'Unmute Microphone'}
@@ -687,11 +739,51 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
                 </button>
               </div>
             )}
+
+            {/* Mobile Chat Button Toggle */}
+            {chatMode === 'video' && (
+              <button
+                type="button"
+                onClick={() => setShowMobileChat(!showMobileChat)}
+                className={`lg:hidden flex h-11 w-11 items-center justify-center rounded-xl transition-all active:scale-90 cursor-pointer relative ${
+                  showMobileChat
+                    ? 'bg-white text-brand-black shadow-xs'
+                    : 'bg-white/10 border border-white/20 text-white hover:bg-white/20'
+                }`}
+                title="Toggle Chat"
+              >
+                <MessageSquare size={17} />
+                {messages.length > 0 && messages[messages.length - 1].sender === 'stranger' && !showMobileChat && (
+                  <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-red-500 animate-pulse" />
+                )}
+              </button>
+            )}
           </div>
         </div>
 
         {/* RIGHT COLUMN: Text Chat Panel */}
-        <div className="w-full lg:w-[380px] h-[350px] lg:h-auto shrink-0">
+        <div
+          className={`${
+            chatMode === 'video'
+              ? `absolute lg:relative inset-y-0 right-0 z-40 w-full sm:w-[350px] lg:w-[calc(30%-12px)] h-full lg:h-auto shrink-0 transition-transform duration-300 transform ${
+                  showMobileChat ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'
+                }`
+              : 'w-full lg:w-[380px] h-[350px] lg:h-auto shrink-0'
+          }`}
+        >
+          {/* Mobile Chat Close Header */}
+          {chatMode === 'video' && showMobileChat && (
+            <div className="flex lg:hidden items-center justify-between bg-white border-b border-brand-gray-mid/40 p-4">
+              <span className="font-bold text-sm text-brand-black">Stranger Chat</span>
+              <button
+                type="button"
+                onClick={() => setShowMobileChat(false)}
+                className="text-brand-black/55 hover:text-brand-black font-bold uppercase tracking-wider text-2xs border border-brand-gray-mid/60 rounded-lg px-2.5 py-1.5 cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          )}
           <ChatPanel
             messages={messages}
             onSendMessage={handleSendMessage}
@@ -703,7 +795,13 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
 
         {/* Peer Profile slide-in panel */}
         {isConnected && partnerUsername && (
-          <div className="w-full lg:w-72 h-[350px] lg:h-auto shrink-0 animate-in slide-in-from-right duration-200">
+          <div
+            className={`${
+              chatMode === 'video'
+                ? 'absolute lg:relative top-16 left-4 lg:top-auto lg:left-auto z-35 max-w-[280px] lg:max-w-none w-auto lg:w-72 h-auto lg:h-auto shrink-0 animate-in slide-in-from-right duration-200'
+                : 'w-full lg:w-72 h-[350px] lg:h-auto shrink-0 animate-in slide-in-from-right duration-200'
+            }`}
+          >
             <PeerProfileCard
               partnerUsername={partnerUsername}
               serverUrl={serverUrl}
@@ -791,6 +889,13 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
           </div>
         </div>
       )}
+      {/* Registration/Login Overlay */}
+      <AuthModal
+        isOpen={authOpen}
+        onClose={() => setAuthOpen(false)}
+        onAuthSuccess={handleAuthSuccess}
+        serverUrl={serverUrl}
+      />
     </div>
   );
 }
