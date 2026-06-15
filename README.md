@@ -1,36 +1,57 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# GhostChat — Meet New People Instantly
 
-## Getting Started
+GhostChat is a real-time anonymous video and text chat platform built with Next.js (frontend) and Node.js/Express with Socket.IO (backend).
 
-First, run the development server:
+## Features
 
+- **Anonymous Matchmaking**: Pair up with random strangers for video or text conversations.
+- **Filters**: Match by country, language, or shared interests.
+- **Social Upgrade**: User profiles, bio, followers, notifications, and direct/private calling.
+- **Reporting & Moderation**: Abusive language detection, report system, and automated banning rules.
+
+---
+
+## 🚀 One-Click Public Deployment (No Tunnels Required)
+
+To host your application publicly on real cloud domains without using local tunnels, follow the simple steps below.
+
+### Step 1: Deploy Backend to Render
+Deploy the Node.js signaling and database server to Render (Free Tier with WebSockets support).
+
+[![Deploy to Render](https://render.com/images/deploy-to-render.svg)](https://render.com/deploy?repo=https://github.com/subhani12344/GhostChat)
+
+1. Click the button above to log into Render and create your web service.
+2. Render will automatically read the `render.yaml` blueprint from your repository and set up a Node service named `strangerlink-backend`.
+3. Under the service environment variables, you can configure your email notifications (SMTP keys) if you want to enable OTP verification.
+4. Once deployed, note down your Render service URL (e.g., `https://strangerlink-backend.onrender.com`).
+
+### Step 2: Deploy Frontend to Vercel
+Deploy the Next.js frontend to Vercel (Free Hobby Tier).
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/subhani12344/GhostChat)
+
+1. Click the button above to import your project into Vercel.
+2. Under **Environment Variables**, add the following variable:
+   - **Key**: `NEXT_PUBLIC_SERVER_URL`
+   - **Value**: Your Render Backend URL (from Step 1, e.g., `https://strangerlink-backend.onrender.com`)
+3. Click **Deploy**.
+4. Once deployment finishes, Vercel will provide your permanent public domain (e.g., `https://ghostchat-app.vercel.app`).
+
+---
+
+## 💻 Local Development
+
+### 1. Run Backend Server
 ```bash
+cd backend
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
+The backend will run on `http://localhost:4000`.
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### 2. Run Frontend App
+```bash
+npm install
+npm run dev
+```
+The frontend will run on `http://localhost:3000`. Make sure your `.env.local` points to `http://localhost:4000`.
