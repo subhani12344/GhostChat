@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Shield, Key, User, QrCode, ArrowRight, Loader2 } from "lucide-react";
+import { Shield, Key, User, QrCode, ArrowRight, Loader2, Settings } from "lucide-react";
 
 export default function AdminLoginPage() {
   const router = useRouter();
@@ -11,7 +11,31 @@ export default function AdminLoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const serverUrl = process.env.NEXT_PUBLIC_SERVER_URL || (typeof window !== "undefined" && !window.location.hostname.includes("localhost") && !window.location.hostname.includes("127.0.0.1") ? "https://ghostchat-backend.onrender.com" : "http://localhost:4000");
+  const serverUrl = (typeof window !== "undefined" && (window as any).GHOSTCHAT_SERVER_URL) || process.env.NEXT_PUBLIC_SERVER_URL || "https://ghostchat-backend.onrender.com";
+  
+  // Settings gear configurations
+  const [showSettings, setShowSettings] = useState(false);
+  const [customServerUrl, setCustomServerUrl] = useState("");
+
+  // Load custom URL on mount
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("ghostchat_backend_url");
+      if (saved) setCustomServerUrl(saved);
+    }
+  }, []);
+
+  const handleSaveSettings = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (typeof window !== "undefined") {
+      if (customServerUrl.trim()) {
+        localStorage.setItem("ghostchat_backend_url", customServerUrl.trim());
+      } else {
+        localStorage.removeItem("ghostchat_backend_url");
+      }
+      window.location.reload();
+    }
+  };
 
   // 2FA state variables
   const [requires2FA, setRequires2FA] = useState(false);
@@ -155,6 +179,16 @@ export default function AdminLoginPage() {
 
       <div className="w-full max-w-md glass-dark rounded-2xl border border-white/10 p-8 space-y-6 text-white select-none relative z-10">
         
+        {/* Settings gear trigger button */}
+        <button
+          type="button"
+          onClick={() => setShowSettings(!showSettings)}
+          className="absolute top-4 right-4 p-2 rounded-lg bg-white/5 hover:bg-white/10 text-white/40 hover:text-white transition-all cursor-pointer z-20"
+          title="Server Connection Settings"
+        >
+          <Settings className="w-4.5 h-4.5" />
+        </button>
+
         {/* Brand Header */}
         <div className="flex flex-col items-center space-y-3">
           <div className="w-14 h-14 rounded-full bg-rose-500/10 border border-rose-500/30 flex items-center justify-center shadow-lg">
@@ -172,8 +206,52 @@ export default function AdminLoginPage() {
           </div>
         )}
 
-        {/* Form routing: Standard Login or 2FA challenge */}
-        {!requires2FA && !setup2FA ? (
+        {showSettings ? (
+          /* Server Configuration Override Panel */
+          <form onSubmit={handleSaveSettings} className="space-y-4">
+            <div className="bg-white/5 border border-white/10 p-4 rounded-xl space-y-2">
+              <h3 className="text-xs uppercase font-bold tracking-wider text-rose-400">Server Configuration</h3>
+              <p className="text-[11px] text-white/40 leading-relaxed leading-normal">
+                If the portal cannot reach the backend server (due to cold-start delays or if your Render backend URL is different), customize your signaling endpoint below.
+              </p>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[11px] uppercase font-bold text-white/50 tracking-wider">Active Server URL</label>
+              <div className="text-xs font-mono bg-black/40 border border-white/5 rounded-xl px-4 py-2.5 text-white/60 select-all break-all">
+                {serverUrl}
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[11px] uppercase font-bold text-white/50 tracking-wider">Override URL</label>
+              <input
+                type="url"
+                placeholder="https://ghostchat-backend.onrender.com"
+                value={customServerUrl}
+                onChange={(e) => setCustomServerUrl(e.target.value)}
+                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-xs focus:outline-none focus:border-rose-500 text-white font-mono placeholder-white/20"
+              />
+              <span className="text-[10px] text-white/20 block mt-1">Leave blank to restore the default Render endpoint fallback.</span>
+            </div>
+
+            <div className="flex space-x-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowSettings(false)}
+                className="flex-1 py-2.5 border border-white/10 hover:bg-white/5 rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                Back
+              </button>
+              <button
+                type="submit"
+                className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-500 active:scale-95 rounded-xl text-xs font-bold transition-all cursor-pointer text-white shadow-lg shadow-rose-950/20"
+              >
+                Save & Apply
+              </button>
+            </div>
+          </form>
+        ) : !requires2FA && !setup2FA ? (
           <form onSubmit={handleLogin} className="space-y-4">
             <div className="space-y-1">
               <label className="text-[11px] uppercase font-bold text-white/50 tracking-wider">Username</label>

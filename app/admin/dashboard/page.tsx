@@ -39,7 +39,7 @@ export default function AdminDashboardPage() {
   const [admin, setAdmin] = useState<any>(null);
   const [token, setToken] = useState("");
 
-  const serverUrl = process.env.NEXT_PUBLIC_SERVER_URL || (typeof window !== "undefined" && !window.location.hostname.includes("localhost") && !window.location.hostname.includes("127.0.0.1") ? "https://ghostchat-backend.onrender.com" : "http://localhost:4000");
+  const serverUrl = (typeof window !== "undefined" && (window as any).GHOSTCHAT_SERVER_URL) || process.env.NEXT_PUBLIC_SERVER_URL || "https://ghostchat-backend.onrender.com";
 
   // Metrics telemetry data
   const [metrics, setMetrics] = useState<Metrics>({
@@ -104,7 +104,7 @@ export default function AdminDashboardPage() {
   }, []);
 
   const setupLiveTelemetry = (accessToken: string) => {
-    const socketUrl = process.env.NEXT_PUBLIC_SERVER_URL || (typeof window !== "undefined" && !window.location.hostname.includes("localhost") && !window.location.hostname.includes("127.0.0.1") ? "https://ghostchat-backend.onrender.com" : "http://localhost:4000");
+    const socketUrl = (typeof window !== "undefined" && (window as any).GHOSTCHAT_SERVER_URL) || process.env.NEXT_PUBLIC_SERVER_URL || "https://ghostchat-backend.onrender.com";
     const socket = io(`${socketUrl}/admin`, {
       auth: { token: accessToken },
       transports: ["websocket", "polling"]

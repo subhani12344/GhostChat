@@ -16,7 +16,8 @@ import {
   Zap,
   CheckCircle,
   AlertTriangle,
-  UserCheck
+  UserCheck,
+  Settings
 } from 'lucide-react';
 
 function LoginContent() {
@@ -37,10 +38,55 @@ function LoginContent() {
   const [status, setStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState('');
 
-  const serverUrl = process.env.NEXT_PUBLIC_SERVER_URL || 
-    (typeof window !== "undefined" && !window.location.hostname.includes("localhost") && !window.location.hostname.includes("127.0.0.1") 
-      ? "https://ghostchat-backend.onrender.com" 
-      : "http://localhost:4000");
+  // Settings gear configurations
+  const [showSettings, setShowSettings] = useState(false);
+  const [customServerUrl, setCustomServerUrl] = useState('');
+  
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("ghostchat_backend_url");
+      if (saved) setCustomServerUrl(saved);
+    }
+  }, []);
+
+  const handleSaveSettings = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (typeof window !== "undefined") {
+      if (customServerUrl.trim()) {
+        localStorage.setItem("ghostchat_backend_url", customServerUrl.trim());
+      } else {
+        localStorage.removeItem("ghostchat_backend_url");
+      }
+      window.location.reload();
+    }
+  };
+
+  const googleClientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '';
+  const githubClientId = process.env.NEXT_PUBLIC_GITHUB_CLIENT_ID || '';
+
+  const handleGoogleLogin = () => {
+    if (!googleClientId) {
+      setSocialModalType('Google');
+      setShowSocialModal(true);
+      return;
+    }
+    const callbackUri = encodeURIComponent(window.location.origin + '/auth/callback');
+    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${googleClientId}&redirect_uri=${callbackUri}&response_type=code&scope=openid%20email%20profile&state=google`;
+    window.location.href = authUrl;
+  };
+
+  const handleGithubLogin = () => {
+    if (!githubClientId) {
+      setSocialModalType('GitHub');
+      setShowSocialModal(true);
+      return;
+    }
+    const callbackUri = encodeURIComponent(window.location.origin + '/auth/callback');
+    const authUrl = `https://github.com/login/oauth/authorize?client_id=${githubClientId}&redirect_uri=${callbackUri}&scope=user:email&state=github`;
+    window.location.href = authUrl;
+  };
+
+  const serverUrl = (typeof window !== "undefined" && (window as any).GHOSTCHAT_SERVER_URL) || process.env.NEXT_PUBLIC_SERVER_URL || "https://ghostchat-backend.onrender.com";
 
   useEffect(() => {
     // Check if session already exists
@@ -225,6 +271,16 @@ function LoginContent() {
 
         <div className="w-full max-w-md bg-white/5 border border-white/10 rounded-3xl p-8 sm:p-10 glass-dark space-y-6 shadow-2xl relative">
           
+          {/* Settings gear trigger button */}
+          <button
+            type="button"
+            onClick={() => setShowSettings(!showSettings)}
+            className="absolute top-4 right-4 p-2 rounded-lg bg-white/5 hover:bg-white/10 text-white/40 hover:text-white transition-all cursor-pointer z-20"
+            title="Server Connection Settings"
+          >
+            <Settings className="w-4.5 h-4.5" />
+          </button>
+          
           {/* Brand Header for Mobile view */}
           <div className="flex flex-col items-center text-center lg:items-start lg:text-left space-y-2">
             <div className="lg:hidden w-12 h-12 rounded-2xl bg-gradient-to-br from-rose-500 to-red-600 flex items-center justify-center shadow-lg shadow-rose-500/20 mb-2">
@@ -249,8 +305,55 @@ function LoginContent() {
             </div>
           )}
 
-          {/* Primary Authentication Form */}
-          <form onSubmit={handleLogin} className="space-y-4">
+          {showSettings ? (
+            /* Server Configuration Override Panel */
+            <form onSubmit={handleSaveSettings} className="space-y-4">
+              <div className="bg-white/5 border border-white/10 p-4 rounded-xl space-y-2 text-left">
+                <h3 className="text-xs uppercase font-bold tracking-wider text-rose-400">Server Configuration</h3>
+                <p className="text-[11px] text-white/40 leading-relaxed leading-normal">
+                  If the client is having trouble reaching the signaling backend (due to cold-start delays or if your Render backend URL is different), customize your signaling endpoint below.
+                </p>
+              </div>
+
+              <div className="space-y-1 text-left">
+                <label className="text-[11px] uppercase font-bold text-white/50 tracking-wider">Active Server URL</label>
+                <div className="text-xs font-mono bg-black/40 border border-white/5 rounded-xl px-4 py-2.5 text-white/60 select-all break-all">
+                  {serverUrl}
+                </div>
+              </div>
+
+              <div className="space-y-1 text-left">
+                <label className="text-[11px] uppercase font-bold text-white/50 tracking-wider">Override URL</label>
+                <input
+                  type="url"
+                  placeholder="https://ghostchat-backend.onrender.com"
+                  value={customServerUrl}
+                  onChange={(e) => setCustomServerUrl(e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-xs focus:outline-none focus:border-rose-500 text-white font-mono placeholder-white/20"
+                />
+                <span className="text-[10px] text-white/20 block mt-1">Leave blank to restore the default Render endpoint fallback.</span>
+              </div>
+
+              <div className="flex space-x-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowSettings(false)}
+                  className="flex-1 py-2.5 border border-white/10 hover:bg-white/5 rounded-xl text-xs font-bold transition-all cursor-pointer text-white"
+                >
+                  Back
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-500 active:scale-95 rounded-xl text-xs font-bold transition-all cursor-pointer text-white shadow-lg shadow-rose-950/20"
+                >
+                  Save & Apply
+                </button>
+              </div>
+            </form>
+          ) : (
+            <>
+              {/* Primary Authentication Form */}
+              <form onSubmit={handleLogin} className="space-y-4">
             <div className="space-y-1">
               <label className="text-[10px] uppercase font-black text-neutral-400 tracking-wider">Username or Email</label>
               <div className="relative">
@@ -333,10 +436,7 @@ function LoginContent() {
             <div className="grid grid-cols-2 gap-3">
               <button
                 type="button"
-                onClick={() => {
-                  setSocialModalType('Google');
-                  setShowSocialModal(true);
-                }}
+                onClick={handleGoogleLogin}
                 className="py-2.5 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 rounded-xl text-xs font-bold flex items-center justify-center space-x-2 transition-all cursor-pointer"
               >
                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
@@ -350,10 +450,7 @@ function LoginContent() {
               
               <button
                 type="button"
-                onClick={() => {
-                  setSocialModalType('GitHub');
-                  setShowSocialModal(true);
-                }}
+                onClick={handleGithubLogin}
                 className="py-2.5 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 rounded-xl text-xs font-bold flex items-center justify-center space-x-2 transition-all cursor-pointer"
               >
                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
@@ -364,13 +461,15 @@ function LoginContent() {
             </div>
           </div>
 
-          {/* Sign up links redirection */}
-          <div className="text-center pt-2">
-            <p className="text-xs text-neutral-400">
-              New to Ghost Chat?{' '}
-              <Link href="/signup" className="text-rose-400 hover:text-rose-300 font-bold underline">Create Account</Link>
-            </p>
-          </div>
+              {/* Sign up links redirection */}
+              <div className="text-center pt-2">
+                <p className="text-xs text-neutral-400">
+                  New to Ghost Chat?{' '}
+                  <Link href="/signup" className="text-rose-400 hover:text-rose-300 font-bold underline">Create Account</Link>
+                </p>
+              </div>
+            </>
+          )}
 
         </div>
       </div>

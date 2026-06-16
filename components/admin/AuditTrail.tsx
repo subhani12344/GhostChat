@@ -37,7 +37,7 @@ export default function AuditTrail({ token }: AuditTrailProps) {
   const [search, setSearch] = useState("");
   const [actionFilter, setActionFilter] = useState("all");
 
-  const serverUrl = process.env.NEXT_PUBLIC_SERVER_URL || (typeof window !== "undefined" && !window.location.hostname.includes("localhost") && !window.location.hostname.includes("127.0.0.1") ? "https://ghostchat-backend.onrender.com" : "http://localhost:4000");
+  const serverUrl = (typeof window !== "undefined" && (window as any).GHOSTCHAT_SERVER_URL) || process.env.NEXT_PUBLIC_SERVER_URL || "https://ghostchat-backend.onrender.com";
 
   const fetchLogs = async () => {
     setLoading(true);

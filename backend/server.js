@@ -304,7 +304,150 @@ async function sendEmail(to, subject, text) {
   });
 }
 
-// ─── HTTP Endpoints ──────────────────────────────────────────────────────────
+// OAuth 2.0 Callback Authentication (Exchanges Code for Session token)
+app.post('/api/auth/oauth/callback', async (req, res) => {
+  const { code, provider } = req.body;
+  if (!code || !provider) {
+    return res.status(400).json({ message: 'Code and provider are required' });
+  }
+
+  try {
+    let email = '';
+    let username = '';
+    let displayName = '';
+
+    // Derives callbackUrl dynamically based on request origin to support both localhost and vercel domains
+    const origin = req.headers.origin || 'https://ghost-chat-taupe.vercel.app';
+    const callbackUrl = `${origin}/auth/callback`;
+
+    if (provider === 'google') {
+      const clientId = process.env.GOOGLE_CLIENT_ID;
+      const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+
+      if (!clientId || !clientSecret) {
+        return res.status(500).json({ message: 'Google OAuth is not configured on the backend server.' });
+      }
+
+      // Exchange code for tokens
+      const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          code,
+          client_id: clientId,
+          client_secret: clientSecret,
+          redirect_uri: callbackUrl,
+          grant_type: 'authorization_code'
+        }).toString()
+      });
+
+      const tokenData = await tokenRes.json();
+      if (!tokenRes.ok) {
+        throw new Error(tokenData.error_description || 'Failed to exchange Google OAuth code.');
+      }
+
+      // Fetch user info
+      const infoRes = await fetch(`https://www.googleapis.com/oauth2/v3/userinfo?access_token=${tokenData.access_token}`);
+      const infoData = await infoRes.json();
+      if (!infoRes.ok) {
+        throw new Error('Failed to fetch Google user profile.');
+      }
+
+      email = infoData.email;
+      displayName = infoData.name || infoData.given_name || 'Google User';
+      username = (email.split('@')[0] + '_google').toLowerCase().replace(/[^a-z0-9_]/g, '');
+    } 
+    else if (provider === 'github') {
+      const clientId = process.env.GITHUB_CLIENT_ID;
+      const clientSecret = process.env.GITHUB_CLIENT_SECRET;
+
+      if (!clientId || !clientSecret) {
+        return res.status(500).json({ message: 'GitHub OAuth is not configured on the backend server.' });
+      }
+
+      // Exchange code for token
+      const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({
+          client_id: clientId,
+          client_secret: clientSecret,
+          code,
+          redirect_uri: callbackUrl
+        })
+      });
+
+      const tokenData = await tokenRes.json();
+      if (!tokenRes.ok || tokenData.error) {
+        throw new Error(tokenData.error_description || 'Failed to exchange GitHub OAuth code.');
+      }
+
+      const accessToken = tokenData.access_token;
+
+      // Fetch GitHub profile info
+      const infoRes = await fetch('https://api.github.com/user', {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'User-Agent': 'GhostChat-OAuth-Client'
+        }
+      });
+      const infoData = await infoRes.json();
+      if (!infoRes.ok) {
+        throw new Error('Failed to fetch GitHub user profile.');
+      }
+
+      // Fetch GitHub emails if not public
+      let githubEmail = infoData.email;
+      if (!githubEmail) {
+        const emailsRes = await fetch('https://api.github.com/user/emails', {
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'User-Agent': 'GhostChat-OAuth-Client'
+          }
+        });
+        if (emailsRes.ok) {
+          const emails = await emailsRes.json();
+          const primary = emails.find(e => e.primary) || emails[0];
+          if (primary) githubEmail = primary.email;
+        }
+      }
+
+      email = githubEmail || `${infoData.login}@github.ghostchat.local`;
+      displayName = infoData.name || infoData.login;
+      username = (infoData.login + '_github').toLowerCase().replace(/[^a-z0-9_]/g, '');
+    } else {
+      return res.status(400).json({ message: 'Unsupported OAuth provider' });
+    }
+
+    // Authenticate or register user dynamically
+    let user = await db.getUserByEmail(email);
+    if (!user) {
+      // Create user
+      const randomPassword = require('crypto').randomBytes(16).toString('hex');
+      const hashedPassword = await bcrypt.hash(randomPassword, 10);
+      user = await db.createUser(username, email, hashedPassword, 'user');
+      await db.updateUserProfile(user.id, { display_name: displayName });
+      
+      // Emit to admin panel
+      emitToAdmins('user:registered', { id: user.id, username: user.username, email: user.email, role: user.role, created_at: user.created_at });
+    }
+
+    // Issue JWT session token
+    const token = jwt.sign(
+      { userId: user.id, username: user.username },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    res.json({ token, username: user.username });
+  } catch (err) {
+    console.error('OAuth callback execution error:', err);
+    res.status(500).json({ message: err.message || 'OAuth authentication sequence failed.' });
+  }
+});
 
 // Direct User Registration (No verification code, enforces email unique, checks strength)
 app.post('/api/auth/register', async (req, res) => {
