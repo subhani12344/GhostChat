@@ -2,7 +2,8 @@
 
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Shield, Key, User, QrCode, ArrowRight, Loader2, Settings } from "lucide-react";
+import { Key, User, QrCode, ArrowRight, Loader2, Settings } from "lucide-react";
+import Logo from "@/components/Logo";
 
 export default function AdminLoginPage() {
   const router = useRouter();
@@ -172,18 +173,18 @@ export default function AdminLoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-black flex items-center justify-center p-4 relative overflow-hidden font-sans">
-      {/* Background neon glows */}
-      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-rose-600/10 rounded-full blur-[120px] pointer-events-none" />
-      <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-red-600/10 rounded-full blur-[120px] pointer-events-none" />
+    <div className="min-h-screen bg-white flex items-center justify-center p-4 relative overflow-hidden font-sans">
+      {/* Background soft gradients */}
+      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-neutral-100 rounded-full blur-[120px] pointer-events-none" />
+      <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-neutral-100 rounded-full blur-[120px] pointer-events-none" />
 
-      <div className="w-full max-w-md glass-dark rounded-2xl border border-white/10 p-8 space-y-6 text-white select-none relative z-10">
+      <div className="w-full max-w-md bg-white border border-neutral-200 shadow-2xl rounded-2xl p-8 space-y-6 text-neutral-900 select-none relative z-10">
         
         {/* Settings gear trigger button */}
         <button
           type="button"
           onClick={() => setShowSettings(!showSettings)}
-          className="absolute top-4 right-4 p-2 rounded-lg bg-white/5 hover:bg-white/10 text-white/40 hover:text-white transition-all cursor-pointer z-20"
+          className="absolute top-4 right-4 p-2 rounded-lg bg-neutral-50 hover:bg-neutral-100 text-neutral-400 hover:text-neutral-600 transition-all cursor-pointer z-20"
           title="Server Connection Settings"
         >
           <Settings className="w-4.5 h-4.5" />
@@ -191,17 +192,15 @@ export default function AdminLoginPage() {
 
         {/* Brand Header */}
         <div className="flex flex-col items-center space-y-3">
-          <div className="w-14 h-14 rounded-full bg-rose-500/10 border border-rose-500/30 flex items-center justify-center shadow-lg">
-            <Shield className="w-7 h-7 text-rose-500 animate-pulse-soft" />
-          </div>
+          <Logo showText={false} size={56} className="text-black" />
           <div className="text-center">
-            <h1 className="font-extrabold text-2xl tracking-wider bg-gradient-to-r from-rose-400 to-red-600 bg-clip-text text-transparent">GHOST COMMAND</h1>
-            <p className="text-xs text-white/40 tracking-widest mt-1 uppercase font-semibold">Security System Authentication</p>
+            <h1 className="font-extrabold text-2xl tracking-wider text-neutral-900">GHOST COMMAND</h1>
+            <p className="text-xs text-neutral-500 tracking-widest mt-1 uppercase font-semibold">Security System Authentication</p>
           </div>
         </div>
 
         {error && (
-          <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-xs py-3 px-4 rounded-xl text-center">
+          <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs py-3 px-4 rounded-xl text-center">
             {error}
           </div>
         )}
@@ -209,43 +208,43 @@ export default function AdminLoginPage() {
         {showSettings ? (
           /* Server Configuration Override Panel */
           <form onSubmit={handleSaveSettings} className="space-y-4">
-            <div className="bg-white/5 border border-white/10 p-4 rounded-xl space-y-2">
-              <h3 className="text-xs uppercase font-bold tracking-wider text-rose-400">Server Configuration</h3>
-              <p className="text-[11px] text-white/40 leading-relaxed leading-normal">
+            <div className="bg-neutral-50 border border-neutral-200 p-4 rounded-xl space-y-2">
+              <h3 className="text-xs uppercase font-bold tracking-wider text-rose-600">Server Configuration</h3>
+              <p className="text-[11px] text-neutral-600 leading-relaxed leading-normal">
                 If the portal cannot reach the backend server (due to cold-start delays or if your Render backend URL is different), customize your signaling endpoint below.
               </p>
             </div>
 
             <div className="space-y-1">
-              <label className="text-[11px] uppercase font-bold text-white/50 tracking-wider">Active Server URL</label>
-              <div className="text-xs font-mono bg-black/40 border border-white/5 rounded-xl px-4 py-2.5 text-white/60 select-all break-all">
+              <label className="text-[11px] uppercase font-bold text-neutral-500 tracking-wider">Active Server URL</label>
+              <div className="text-xs font-mono bg-neutral-100 border border-neutral-200 rounded-xl px-4 py-2.5 text-neutral-700 select-all break-all">
                 {serverUrl}
               </div>
             </div>
 
             <div className="space-y-1">
-              <label className="text-[11px] uppercase font-bold text-white/50 tracking-wider">Override URL</label>
+              <label className="text-[11px] uppercase font-bold text-neutral-500 tracking-wider">Override URL</label>
               <input
                 type="url"
                 placeholder="https://ghostchat-backend.onrender.com"
                 value={customServerUrl}
                 onChange={(e) => setCustomServerUrl(e.target.value)}
-                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-xs focus:outline-none focus:border-rose-500 text-white font-mono placeholder-white/20"
+                className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-2.5 text-xs focus:outline-none focus:border-rose-500 text-neutral-900 font-mono placeholder-neutral-400"
               />
-              <span className="text-[10px] text-white/20 block mt-1">Leave blank to restore the default Render endpoint fallback.</span>
+              <span className="text-[10px] text-neutral-400 block mt-1">Leave blank to restore the default Render endpoint fallback.</span>
             </div>
 
             <div className="flex space-x-3 pt-2">
               <button
                 type="button"
                 onClick={() => setShowSettings(false)}
-                className="flex-1 py-2.5 border border-white/10 hover:bg-white/5 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                className="flex-1 py-2.5 border border-neutral-200 hover:bg-neutral-50 rounded-xl text-xs font-bold transition-all cursor-pointer text-neutral-800"
               >
                 Back
               </button>
               <button
                 type="submit"
-                className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-500 active:scale-95 rounded-xl text-xs font-bold transition-all cursor-pointer text-white shadow-lg shadow-rose-950/20"
+                className="flex-1 py-2.5 bg-neutral-900 hover:bg-black active:scale-95 rounded-xl text-xs font-bold transition-all cursor-pointer text-white shadow-lg shadow-neutral-200"
               >
                 Save & Apply
               </button>
@@ -254,31 +253,31 @@ export default function AdminLoginPage() {
         ) : !requires2FA && !setup2FA ? (
           <form onSubmit={handleLogin} className="space-y-4">
             <div className="space-y-1">
-              <label className="text-[11px] uppercase font-bold text-white/50 tracking-wider">Username</label>
+              <label className="text-[11px] uppercase font-bold text-neutral-500 tracking-wider">Username</label>
               <div className="relative">
-                <User className="absolute left-3 top-3 w-4 h-4 text-white/30" />
+                <User className="absolute left-3 top-3 w-4 h-4 text-neutral-400" />
                 <input
                   type="text"
                   required
                   placeholder="superadmin_1"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  className="w-full bg-white/5 border border-white/10 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:border-rose-500 text-white transition-colors placeholder-white/20"
+                  className="w-full bg-neutral-50 border border-neutral-200 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:border-neutral-400 text-neutral-900 transition-colors placeholder-neutral-400"
                 />
               </div>
             </div>
 
             <div className="space-y-1">
-              <label className="text-[11px] uppercase font-bold text-white/50 tracking-wider">Password</label>
+              <label className="text-[11px] uppercase font-bold text-neutral-500 tracking-wider">Password</label>
               <div className="relative">
-                <Key className="absolute left-3 top-3 w-4 h-4 text-white/30" />
+                <Key className="absolute left-3 top-3 w-4 h-4 text-neutral-400" />
                 <input
                   type="password"
                   required
                   placeholder="••••••••••••••••••••"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full bg-white/5 border border-white/10 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:border-rose-500 text-white transition-colors placeholder-white/20"
+                  className="w-full bg-neutral-50 border border-neutral-200 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:border-neutral-400 text-neutral-900 transition-colors placeholder-neutral-400"
                 />
               </div>
             </div>
@@ -286,7 +285,7 @@ export default function AdminLoginPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-3 bg-rose-600 hover:bg-rose-500 active:scale-95 transition-all text-sm font-bold rounded-xl flex items-center justify-center space-x-2 mt-6 cursor-pointer"
+              className="w-full py-3 bg-neutral-900 hover:bg-black text-white active:scale-95 transition-all text-sm font-bold rounded-xl flex items-center justify-center space-x-2 mt-6 cursor-pointer"
             >
               {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <><span>Authenticate</span> <ArrowRight className="w-4 h-4" /></>}
             </button>
@@ -294,23 +293,23 @@ export default function AdminLoginPage() {
         ) : setup2FA ? (
           /* 2FA Setup Flow */
           <form onSubmit={handleVerify2FA} className="space-y-5">
-            <div className="bg-rose-500/10 border border-rose-500/20 p-4 rounded-xl text-xs text-rose-300 text-center leading-relaxed">
+            <div className="bg-rose-50 border border-rose-100 p-4 rounded-xl text-xs text-rose-800 text-center leading-relaxed">
               🔒 <strong>2FA Setup Required!</strong> Enter the secret key below in Google Authenticator or scan the QR code to proceed.
             </div>
 
             <div className="flex flex-col items-center space-y-3">
-              <div className="bg-white p-3 rounded-lg border border-white/10 flex items-center justify-center w-40 h-40">
+              <div className="bg-white p-3 rounded-lg border border-neutral-200 flex items-center justify-center w-40 h-40 shadow-sm">
                 {/* QR code fallback text box */}
                 <div className="text-black text-center text-xs space-y-2 font-mono break-all p-1">
                   <QrCode className="w-8 h-8 text-neutral-800 mx-auto" />
                   <span className="text-[10px] text-neutral-500 select-all block">{setupSecret}</span>
                 </div>
               </div>
-              <span className="text-[10px] text-white/40 uppercase font-semibold">Key: <code className="text-rose-400 select-all">{setupSecret}</code></span>
+              <span className="text-[10px] text-neutral-500 uppercase font-semibold">Key: <code className="text-rose-600 select-all">{setupSecret}</code></span>
             </div>
 
             <div className="space-y-1">
-              <label className="text-[11px] uppercase font-bold text-white/50 tracking-wider">Verification Code</label>
+              <label className="text-[11px] uppercase font-bold text-neutral-500 tracking-wider">Verification Code</label>
               <input
                 type="text"
                 required
@@ -318,14 +317,14 @@ export default function AdminLoginPage() {
                 placeholder="000000"
                 value={otpCode}
                 onChange={(e) => setOtpCode(e.target.value)}
-                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-center text-lg font-bold tracking-[6px] focus:outline-none focus:border-rose-500 text-white transition-colors"
+                className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-2.5 text-center text-lg font-bold tracking-[6px] focus:outline-none focus:border-neutral-400 text-neutral-900 transition-colors"
               />
             </div>
 
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-3 bg-rose-600 hover:bg-rose-500 active:scale-95 transition-all text-sm font-bold rounded-xl flex items-center justify-center space-x-2 cursor-pointer"
+              className="w-full py-3 bg-neutral-900 hover:bg-black text-white active:scale-95 transition-all text-sm font-bold rounded-xl flex items-center justify-center space-x-2 cursor-pointer"
             >
               {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <span>Confirm Secret Enrollment</span>}
             </button>
@@ -333,12 +332,12 @@ export default function AdminLoginPage() {
         ) : (
           /* Standard 2FA Verification Flow */
           <form onSubmit={handleVerify2FA} className="space-y-4">
-            <div className="bg-rose-500/10 border border-rose-500/20 p-4 rounded-xl text-xs text-rose-300 text-center leading-relaxed">
+            <div className="bg-rose-50 border border-rose-100 p-4 rounded-xl text-xs text-rose-800 text-center leading-relaxed">
               🔑 <strong>Enter 2FA Code</strong> to authorize this secure admin session.
             </div>
 
             <div className="space-y-1">
-              <label className="text-[11px] uppercase font-bold text-white/50 tracking-wider">Authenticator TOTP Code</label>
+              <label className="text-[11px] uppercase font-bold text-neutral-500 tracking-wider">Authenticator TOTP Code</label>
               <input
                 type="text"
                 required
@@ -346,14 +345,14 @@ export default function AdminLoginPage() {
                 placeholder="000000"
                 value={otpCode}
                 onChange={(e) => setOtpCode(e.target.value)}
-                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-center text-lg font-bold tracking-[6px] focus:outline-none focus:border-rose-500 text-white transition-colors"
+                className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-2.5 text-center text-lg font-bold tracking-[6px] focus:outline-none focus:border-neutral-400 text-neutral-900 transition-colors"
               />
             </div>
 
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-3 bg-rose-600 hover:bg-rose-500 active:scale-95 transition-all text-sm font-bold rounded-xl flex items-center justify-center space-x-2 cursor-pointer"
+              className="w-full py-3 bg-neutral-900 hover:bg-black text-white active:scale-95 transition-all text-sm font-bold rounded-xl flex items-center justify-center space-x-2 cursor-pointer"
             >
               {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <span>Authorize Session</span>}
             </button>

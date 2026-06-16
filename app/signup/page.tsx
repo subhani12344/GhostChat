@@ -4,7 +4,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { 
-  Shield, 
   Key, 
   User, 
   Mail, 
@@ -19,6 +18,7 @@ import {
   FileText,
   UserCheck
 } from 'lucide-react';
+import Logo from '@/components/Logo';
 
 export default function SignupPage() {
   const router = useRouter();
@@ -222,53 +222,50 @@ export default function SignupPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#060606] flex items-stretch justify-center relative overflow-hidden font-sans select-none text-white">
-      {/* Background Mesh Glows */}
-      <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-rose-900/10 rounded-full blur-[150px] pointer-events-none animate-pulse-soft" />
-      <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-red-950/20 rounded-full blur-[150px] pointer-events-none animate-pulse-soft" style={{ animationDelay: '1.5s' }} />
+    <div className="min-h-screen bg-white flex items-stretch justify-center relative overflow-hidden font-sans select-none text-neutral-900">
+      {/* Background Soft Gradients */}
+      <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-neutral-100 rounded-full blur-[150px] pointer-events-none animate-pulse-soft" />
+      <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-neutral-100 rounded-full blur-[150px] pointer-events-none animate-pulse-soft" style={{ animationDelay: '1.5s' }} />
 
       {/* LEFT PANEL: Brand Showcase (Desktop) */}
-      <div className="hidden lg:flex lg:w-1/2 flex-col justify-between p-12 relative overflow-hidden border-r border-white/5 bg-gradient-to-br from-neutral-950 to-neutral-900">
-        <div className="absolute inset-0 bg-[linear-gradient(to_right,#8080800a_1px,transparent_1px),linear-gradient(to_bottom,#8080800a_1px,transparent_1px)] bg-[size:24px_24px] pointer-events-none" />
-        <div className="absolute top-[20%] right-[10%] w-72 h-72 bg-gradient-to-r from-rose-500/10 to-red-500/15 rounded-full blur-3xl pointer-events-none animate-pulse-soft" />
+      <div className="hidden lg:flex lg:w-1/2 flex-col justify-between p-12 relative overflow-hidden border-r border-neutral-200 bg-neutral-50">
+        <div className="absolute inset-0 bg-[linear-gradient(to_right,#00000005_1px,transparent_1px),linear-gradient(to_bottom,#00000005_1px,transparent_1px)] bg-[size:24px_24px] pointer-events-none" />
+        <div className="absolute top-[20%] right-[10%] w-72 h-72 bg-gradient-to-r from-neutral-200/50 to-neutral-300/30 rounded-full blur-3xl pointer-events-none animate-pulse-soft" />
 
         <div className="flex items-center space-x-3 relative z-10">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-rose-500 to-red-600 flex items-center justify-center shadow-lg shadow-rose-500/20">
-            <Shield className="w-5 h-5 text-white" />
-          </div>
-          <span className="font-extrabold text-xl tracking-wider bg-gradient-to-r from-white to-neutral-400 bg-clip-text text-transparent">GHOST CHAT</span>
+          <Logo showText={true} size={40} className="text-black" />
         </div>
 
         <div className="space-y-8 max-w-lg relative z-10 my-auto">
           <div className="space-y-4">
-            <h1 className="text-4xl font-extrabold tracking-tight leading-tight bg-gradient-to-r from-white via-neutral-100 to-neutral-400 bg-clip-text text-transparent">
+            <h1 className="text-4xl font-extrabold tracking-tight leading-tight text-neutral-900">
               Create an account to build your follow network.
             </h1>
-            <p className="text-sm text-neutral-400 leading-relaxed">
+            <p className="text-sm text-neutral-600 leading-relaxed">
               Unlock the ability to add friends, prompt match notifications, custom nicknaming, and direct match invites.
             </p>
           </div>
 
           <div className="grid gap-4">
             {/* Feature Item 1 */}
-            <div className="flex items-center gap-4 bg-white/5 border border-white/10 rounded-2xl p-4 glass-dark">
-              <div className="h-10 w-10 shrink-0 flex items-center justify-center rounded-xl bg-rose-500/10 border border-rose-500/20">
-                <CheckCircle className="w-5 h-5 text-rose-400" />
+            <div className="flex items-center gap-4 bg-white border border-neutral-200/80 rounded-2xl p-4 shadow-sm hover:border-neutral-300 hover:shadow-md transition-all hover:translate-y-[-2px] duration-300 text-neutral-900">
+              <div className="h-10 w-10 shrink-0 flex items-center justify-center rounded-xl bg-neutral-100 border border-neutral-200">
+                <CheckCircle className="w-5 h-5 text-neutral-900" />
               </div>
               <div>
-                <h3 className="font-bold text-sm text-neutral-200">Mutual Invites</h3>
-                <p className="text-xs text-neutral-400 mt-0.5">Send text or video room invites directly to followers.</p>
+                <h3 className="font-bold text-sm text-neutral-900">Mutual Invites</h3>
+                <p className="text-xs text-neutral-600 mt-0.5">Send text or video room invites directly to followers.</p>
               </div>
             </div>
 
             {/* Feature Item 2 */}
-            <div className="flex items-center gap-4 bg-white/5 border border-white/10 rounded-2xl p-4 glass-dark">
-              <div className="h-10 w-10 shrink-0 flex items-center justify-center rounded-xl bg-rose-500/10 border border-rose-500/20">
-                <FileText className="w-5 h-5 text-rose-400" />
+            <div className="flex items-center gap-4 bg-white border border-neutral-200/80 rounded-2xl p-4 shadow-sm hover:border-neutral-300 hover:shadow-md transition-all hover:translate-y-[-2px] duration-300 text-neutral-900">
+              <div className="h-10 w-10 shrink-0 flex items-center justify-center rounded-xl bg-neutral-100 border border-neutral-200">
+                <FileText className="w-5 h-5 text-neutral-900" />
               </div>
               <div>
-                <h3 className="font-bold text-sm text-neutral-200">Custom Profile Details</h3>
-                <p className="text-xs text-neutral-400 mt-0.5">Configure your unique nickname, bio, and visual avatar.</p>
+                <h3 className="font-bold text-sm text-neutral-900">Custom Profile Details</h3>
+                <p className="text-xs text-neutral-600 mt-0.5">Configure your unique nickname, bio, and visual avatar.</p>
               </div>
             </div>
           </div>
@@ -277,22 +274,22 @@ export default function SignupPage() {
         <div className="text-2xs text-neutral-500 relative z-10 flex justify-between w-full">
           <span>&copy; {new Date().getFullYear()} Ghost Chat, Inc.</span>
           <span className="space-x-3">
-            <Link href="/terms" className="hover:text-neutral-300 transition-colors">Terms of Service</Link>
-            <Link href="/privacy" className="hover:text-neutral-300 transition-colors">Privacy Policy</Link>
+            <Link href="/terms" className="hover:text-neutral-800 transition-colors">Terms of Service</Link>
+            <Link href="/privacy" className="hover:text-neutral-800 transition-colors">Privacy Policy</Link>
           </span>
         </div>
       </div>
 
       {/* RIGHT PANEL: Auth Card Form */}
       <div className="w-full lg:w-1/2 flex flex-col justify-center items-center p-6 sm:p-12 relative z-10 overflow-y-auto">
-        <div className="w-full max-w-md bg-white/5 border border-white/10 rounded-3xl p-8 glass-dark space-y-6 shadow-2xl relative my-8">
+        <div className="w-full max-w-md bg-white border border-neutral-200/80 rounded-3xl p-8 shadow-xl space-y-6 relative my-8">
           
           {/* Header */}
           <div className="flex flex-col items-center text-center lg:items-start lg:text-left space-y-2">
-            <h2 className="text-2xl font-black tracking-tight bg-gradient-to-r from-white via-neutral-100 to-neutral-400 bg-clip-text text-transparent">
+            <h2 className="text-2xl font-black tracking-tight text-neutral-900">
               {step === 'form' ? 'Create Account' : step === 'otp' ? 'Verify Your Email' : 'Account Confirmed!'}
             </h2>
-            <p className="text-xs text-neutral-400">
+            <p className="text-xs text-neutral-600">
               {step === 'form' 
                 ? 'Join thousands of anonymous chatters globally.' 
                 : step === 'otp' 
@@ -303,7 +300,7 @@ export default function SignupPage() {
           </div>
 
           {errorMessage && (
-            <div className="bg-rose-500/10 border border-rose-500/35 text-rose-400 text-xs py-3 px-4 rounded-xl flex items-center space-x-2 animate-in fade-in zoom-in duration-200">
+            <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs py-3 px-4 rounded-xl flex items-center space-x-2 animate-in fade-in zoom-in duration-200">
               <AlertTriangle className="w-4 h-4 shrink-0" />
               <span className="flex-1 leading-snug">{errorMessage}</span>
             </div>
@@ -314,47 +311,47 @@ export default function SignupPage() {
             <form onSubmit={handleSignupSubmit} className="space-y-4">
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <label className="text-[10px] uppercase font-black text-neutral-400 tracking-wider">Username</label>
+                  <label className="text-[10px] uppercase font-black text-neutral-500 tracking-wider">Username</label>
                   <input
                     type="text"
                     required
                     placeholder="superadmin_1"
                     value={username}
                     onChange={(e) => setUsername(e.target.value.replace(/\s+/g, ''))}
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white placeholder-neutral-600 focus:outline-none focus:border-rose-500 transition-all"
+                    className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-2.5 text-xs text-neutral-900 placeholder-neutral-400 focus:outline-none focus:border-neutral-400 focus:bg-white transition-all"
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-[10px] uppercase font-black text-neutral-400 tracking-wider">Display Nickname</label>
+                  <label className="text-[10px] uppercase font-black text-neutral-500 tracking-wider">Display Nickname</label>
                   <input
                     type="text"
                     required
                     placeholder="Display Name"
                     value={displayName}
                     onChange={(e) => setDisplayName(e.target.value)}
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white placeholder-neutral-600 focus:outline-none focus:border-rose-500 transition-all"
+                    className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-2.5 text-xs text-neutral-900 placeholder-neutral-400 focus:outline-none focus:border-neutral-400 focus:bg-white transition-all"
                   />
                 </div>
               </div>
 
               <div className="space-y-1">
-                <label className="text-[10px] uppercase font-black text-neutral-400 tracking-wider">Email Address</label>
+                <label className="text-[10px] uppercase font-black text-neutral-500 tracking-wider">Email Address</label>
                 <div className="relative">
-                  <Mail className="absolute left-3.5 top-3.5 w-4 h-4 text-neutral-500" />
+                  <Mail className="absolute left-3.5 top-3.5 w-4 h-4 text-neutral-400" />
                   <input
                     type="email"
                     required
                     placeholder="name@example.com"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    className="w-full bg-white/5 border border-white/10 rounded-xl pl-10 pr-4 py-2.5 text-xs text-white placeholder-neutral-600 focus:outline-none focus:border-rose-500 transition-all"
+                    className="w-full bg-neutral-50 border border-neutral-200 rounded-xl pl-10 pr-4 py-2.5 text-xs text-neutral-900 placeholder-neutral-400 focus:outline-none focus:border-neutral-400 focus:bg-white transition-all"
                   />
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <label className="text-[10px] uppercase font-black text-neutral-400 tracking-wider">Password</label>
+                  <label className="text-[10px] uppercase font-black text-neutral-500 tracking-wider">Password</label>
                   <div className="relative">
                     <input
                       type={showPassword ? 'text' : 'password'}
@@ -362,12 +359,12 @@ export default function SignupPage() {
                       placeholder="••••••••"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
-                      className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white placeholder-neutral-600 focus:outline-none focus:border-rose-500 transition-all"
+                      className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-2.5 text-xs text-neutral-900 placeholder-neutral-400 focus:outline-none focus:border-neutral-400 focus:bg-white transition-all"
                     />
                     <button
                       type="button"
                       onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-3 top-3 text-neutral-500 hover:text-neutral-300"
+                      className="absolute right-3 top-3 text-neutral-400 hover:text-neutral-600"
                     >
                       {showPassword ? <EyeOff className="w-4.5 h-4.5" /> : <Eye className="w-4.5 h-4.5" />}
                     </button>
@@ -375,55 +372,55 @@ export default function SignupPage() {
                 </div>
 
                 <div className="space-y-1">
-                  <label className="text-[10px] uppercase font-black text-neutral-400 tracking-wider">Confirm Password</label>
+                  <label className="text-[10px] uppercase font-black text-neutral-500 tracking-wider">Confirm Password</label>
                   <input
                     type="password"
                     required
                     placeholder="••••••••"
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white placeholder-neutral-600 focus:outline-none focus:border-rose-500 transition-all"
+                    className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-2.5 text-xs text-neutral-900 placeholder-neutral-400 focus:outline-none focus:border-neutral-400 focus:bg-white transition-all"
                   />
                 </div>
               </div>
 
               {/* Password strength checklist */}
               {password && (
-                <div className="rounded-xl border border-white/5 p-3.5 bg-white/[0.02] space-y-2">
-                  <div className="flex justify-between items-center text-[10px] font-black uppercase text-neutral-400">
+                <div className="rounded-xl border border-neutral-200 p-3.5 bg-neutral-50 space-y-2">
+                  <div className="flex justify-between items-center text-[10px] font-black uppercase text-neutral-500">
                     <span>Password Security</span>
-                    <span className="text-rose-400">{calculateStrength().label}</span>
+                    <span className="text-rose-600">{calculateStrength().label}</span>
                   </div>
-                  <div className="w-full bg-white/10 h-1.5 rounded-full overflow-hidden">
+                  <div className="w-full bg-neutral-200 h-1.5 rounded-full overflow-hidden">
                     <div 
                       className={`h-full transition-all duration-500 ${calculateStrength().color}`}
                       style={{ width: calculateStrength().width }}
                     />
                   </div>
 
-                  <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-[10px] font-semibold text-neutral-400">
+                  <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-[10px] font-semibold text-neutral-500">
                     <div className="flex items-center gap-1.5">
-                      <span className={`h-1.5 w-1.5 rounded-full ${hasMinLen ? 'bg-emerald-500' : 'bg-neutral-600'}`} />
+                      <span className={`h-1.5 w-1.5 rounded-full ${hasMinLen ? 'bg-emerald-500' : 'bg-neutral-300'}`} />
                       <span>8+ Characters</span>
                     </div>
                     <div className="flex items-center gap-1.5">
-                      <span className={`h-1.5 w-1.5 rounded-full ${hasCap ? 'bg-emerald-500' : 'bg-neutral-600'}`} />
+                      <span className={`h-1.5 w-1.5 rounded-full ${hasCap ? 'bg-emerald-500' : 'bg-neutral-300'}`} />
                       <span>Uppercase Letter</span>
                     </div>
                     <div className="flex items-center gap-1.5">
-                      <span className={`h-1.5 w-1.5 rounded-full ${hasSmall ? 'bg-emerald-500' : 'bg-neutral-600'}`} />
+                      <span className={`h-1.5 w-1.5 rounded-full ${hasSmall ? 'bg-emerald-500' : 'bg-neutral-300'}`} />
                       <span>Lowercase Letter</span>
                     </div>
                     <div className="flex items-center gap-1.5">
-                      <span className={`h-1.5 w-1.5 rounded-full ${hasNumber ? 'bg-emerald-500' : 'bg-neutral-600'}`} />
+                      <span className={`h-1.5 w-1.5 rounded-full ${hasNumber ? 'bg-emerald-500' : 'bg-neutral-300'}`} />
                       <span>One Number</span>
                     </div>
                     <div className="flex items-center gap-1.5">
-                      <span className={`h-1.5 w-1.5 rounded-full ${hasSymbol ? 'bg-emerald-500' : 'bg-neutral-600'}`} />
+                      <span className={`h-1.5 w-1.5 rounded-full ${hasSymbol ? 'bg-emerald-500' : 'bg-neutral-300'}`} />
                       <span>Special Symbol</span>
                     </div>
                     <div className="flex items-center gap-1.5">
-                      <span className={`h-1.5 w-1.5 rounded-full ${password && passwordsMatch ? 'bg-emerald-500' : 'bg-neutral-600'}`} />
+                      <span className={`h-1.5 w-1.5 rounded-full ${password && passwordsMatch ? 'bg-emerald-500' : 'bg-neutral-300'}`} />
                       <span>Passwords Match</span>
                     </div>
                   </div>
@@ -432,24 +429,24 @@ export default function SignupPage() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <label className="text-[10px] uppercase font-black text-neutral-400 tracking-wider">Date of Birth</label>
+                  <label className="text-[10px] uppercase font-black text-neutral-500 tracking-wider">Date of Birth</label>
                   <div className="relative">
                     <input
                       type="date"
                       required
                       value={dob}
                       onChange={(e) => setDob(e.target.value)}
-                      className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-rose-500 transition-all [color-scheme:dark]"
+                      className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-2.5 text-xs text-neutral-900 focus:outline-none focus:border-neutral-400 focus:bg-white transition-all"
                     />
                   </div>
                 </div>
 
                 <div className="space-y-1">
-                  <label className="text-[10px] uppercase font-black text-neutral-400 tracking-wider">Country Location</label>
+                  <label className="text-[10px] uppercase font-black text-neutral-500 tracking-wider">Country Location</label>
                   <select
                     value={country}
                     onChange={(e) => setCountry(e.target.value)}
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-rose-500 transition-all [&_option]:bg-neutral-900"
+                    className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-2.5 text-xs text-neutral-900 focus:outline-none focus:border-neutral-400 focus:bg-white transition-all [&_option]:bg-white [&_option]:text-neutral-900"
                   >
                     <option value="United States">United States</option>
                     <option value="United Kingdom">United Kingdom</option>
@@ -465,18 +462,18 @@ export default function SignupPage() {
 
               {/* Accept terms checkbox */}
               <div className="pt-1">
-                <label className="flex items-start space-x-2 text-xs text-neutral-400 font-semibold cursor-pointer leading-snug">
+                <label className="flex items-start space-x-2 text-xs text-neutral-600 font-semibold cursor-pointer leading-snug">
                   <input
                     type="checkbox"
                     required
                     checked={acceptTerms}
                     onChange={(e) => setAcceptTerms(e.target.checked)}
-                    className="rounded bg-white/5 border border-white/10 accent-rose-600 w-3.5 h-3.5 mt-0.5 outline-none focus:ring-0"
+                    className="rounded bg-neutral-50 border border-neutral-300 accent-neutral-900 w-3.5 h-3.5 mt-0.5 outline-none focus:ring-0"
                   />
                   <span>
                     I accept the{' '}
-                    <Link href="/terms" className="text-rose-400 hover:text-rose-300 underline font-bold">Terms of Service</Link> and{' '}
-                    <Link href="/privacy" className="text-rose-400 hover:text-rose-300 underline font-bold">Privacy Policy</Link>.
+                    <Link href="/terms" className="text-rose-600 hover:text-rose-700 underline font-bold">Terms of Service</Link> and{' '}
+                    <Link href="/privacy" className="text-rose-600 hover:text-rose-700 underline font-bold">Privacy Policy</Link>.
                   </span>
                 </label>
               </div>
@@ -484,7 +481,7 @@ export default function SignupPage() {
               <button
                 type="submit"
                 disabled={loading || !isFormValid}
-                className="w-full py-3.5 bg-gradient-to-r from-rose-600 to-red-700 hover:from-rose-500 hover:to-red-600 active:scale-[0.98] transition-all text-xs font-bold uppercase tracking-wider rounded-xl flex items-center justify-center space-x-2 shadow-lg shadow-rose-900/20 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                className="w-full py-3.5 bg-neutral-900 hover:bg-black text-white active:scale-[0.98] transition-all text-xs font-bold uppercase tracking-wider rounded-xl flex items-center justify-center space-x-2 shadow-lg shadow-neutral-200 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
               >
                 {loading ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
@@ -499,7 +496,7 @@ export default function SignupPage() {
           ) : step === 'otp' ? (
             /* STEP 2: Registration OTP verification code */
             <form onSubmit={handleVerifyOtp} className="space-y-6">
-              <div className="bg-rose-500/10 border border-rose-500/20 p-4 rounded-xl text-xs text-rose-300 text-center leading-relaxed">
+              <div className="bg-rose-50 border border-rose-100 p-4 rounded-xl text-xs text-rose-800 text-center leading-relaxed">
                 📧 <strong>OTP Code Dispatched!</strong> Enter the 6-digit confirmation key to verify your email and activate your account.
               </div>
 
@@ -515,36 +512,36 @@ export default function SignupPage() {
                     }}
                     onChange={(e) => handleOtpInput(idx, e.target.value)}
                     onKeyDown={(e) => handleOtpKeyDown(idx, e)}
-                    className="w-12 h-14 bg-white/5 border border-white/10 rounded-xl text-center text-lg font-bold focus:outline-none focus:border-rose-500 text-white transition-all outline-none"
+                    className="w-12 h-14 bg-neutral-50 border border-neutral-200 rounded-xl text-center text-lg font-bold focus:outline-none focus:border-neutral-400 text-neutral-900 transition-all outline-none"
                   />
                 ))}
               </div>
 
               <div className="text-center space-y-2">
                 {otpTimer > 0 ? (
-                  <p className="text-xs text-neutral-400 font-semibold">
-                    Resend code in <span className="text-rose-400 tracking-wider font-mono font-bold">{Math.floor(otpTimer / 60)}:{(otpTimer % 60).toString().padStart(2, '0')}</span>
+                  <p className="text-xs text-neutral-500 font-semibold">
+                    Resend code in <span className="text-rose-600 tracking-wider font-mono font-bold">{Math.floor(otpTimer / 60)}:{(otpTimer % 60).toString().padStart(2, '0')}</span>
                   </p>
                 ) : (
                   <button
                     type="button"
                     onClick={handleResendOtp}
                     disabled={loading}
-                    className="text-xs text-rose-400 hover:text-rose-300 font-bold underline transition-colors cursor-pointer"
+                    className="text-xs text-rose-600 hover:text-rose-700 font-bold underline transition-colors cursor-pointer"
                   >
                     Resend Verification Code
                   </button>
                 )}
 
                 {resendCount > 0 && (
-                  <p className="text-[10px] text-neutral-500">Resend attempts: {resendCount}/3</p>
+                  <p className="text-[10px] text-neutral-400">Resend attempts: {resendCount}/3</p>
                 )}
               </div>
 
               <button
                 type="submit"
                 disabled={loading || otpCode.join('').length < 6}
-                className="w-full py-3.5 bg-gradient-to-r from-rose-600 to-red-700 hover:from-rose-500 hover:to-red-600 active:scale-[0.98] transition-all text-xs font-bold uppercase tracking-wider rounded-xl flex items-center justify-center space-x-2 cursor-pointer"
+                className="w-full py-3.5 bg-neutral-900 hover:bg-black text-white active:scale-[0.98] transition-all text-xs font-bold uppercase tracking-wider rounded-xl flex items-center justify-center space-x-2 cursor-pointer"
               >
                 {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>Confirm Email Verification</span>}
               </button>
@@ -552,12 +549,12 @@ export default function SignupPage() {
           ) : (
             /* STEP 3: Verification success */
             <div className="flex flex-col items-center justify-center py-8 text-center space-y-4 animate-in fade-in duration-300">
-              <div className="w-16 h-16 rounded-full bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center shadow-lg shadow-emerald-500/20">
-                <UserCheck className="w-8 h-8 text-emerald-400 animate-bounce" />
+              <div className="w-16 h-16 rounded-full bg-emerald-50 border border-emerald-200 flex items-center justify-center shadow-lg shadow-emerald-100">
+                <UserCheck className="w-8 h-8 text-emerald-600 animate-bounce" />
               </div>
               <div className="space-y-1">
-                <h3 className="text-lg font-bold text-emerald-400">Account Activated!</h3>
-                <p className="text-xs text-neutral-400">Your email has been verified. Redirecting you to chat...</p>
+                <h3 className="text-lg font-bold text-emerald-700">Account Activated!</h3>
+                <p className="text-xs text-neutral-500">Your email has been verified. Redirecting you to chat...</p>
               </div>
             </div>
           )}
@@ -565,9 +562,9 @@ export default function SignupPage() {
           {/* Redirection link back to Login */}
           {step === 'form' && (
             <div className="text-center pt-2">
-              <p className="text-xs text-neutral-400">
+              <p className="text-xs text-neutral-600">
                 Already have an account?{' '}
-                <Link href="/login" className="text-rose-400 hover:text-rose-300 font-bold underline">Login</Link>
+                <Link href="/login" className="text-rose-600 hover:text-rose-700 font-bold underline">Login</Link>
               </p>
             </div>
           )}
@@ -577,3 +574,4 @@ export default function SignupPage() {
     </div>
   );
 }
+
