@@ -10,6 +10,55 @@ require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 const { db, initDb } = require('./db');
 
+// Base32 Decode for TOTP
+function base32Decode(str) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  const clean = str.replace(/=+$/, '').toUpperCase();
+  let bits = '';
+  for (let i = 0; i < clean.length; i++) {
+    const val = alphabet.indexOf(clean[i]);
+    if (val === -1) throw new Error('Invalid base32 character');
+    bits += val.toString(2).padStart(5, '0');
+  }
+  const buffer = [];
+  for (let i = 0; i + 8 <= bits.length; i += 8) {
+    buffer.push(parseInt(bits.substr(i, 8), 2));
+  }
+  return Buffer.from(buffer);
+}
+
+// Generate TOTP code dynamically via HMAC-SHA1
+function generateTOTP(secret, time = Date.now()) {
+  const crypto = require('crypto');
+  const key = base32Decode(secret);
+  const epoch = Math.floor(time / 1000);
+  const counter = Math.floor(epoch / 30);
+  const buffer = Buffer.alloc(8);
+  buffer.writeUInt32BE(Math.floor(counter / 0x100000000), 0);
+  buffer.writeUInt32BE(counter % 0x100000000, 4);
+  const hmac = crypto.createHmac('sha1', key);
+  hmac.update(buffer);
+  const hash = hmac.digest();
+  const offset = hash[hash.length - 1] & 0xf;
+  const binary = ((hash[offset] & 0x7f) << 24) |
+                 ((hash[offset + 1] & 0xff) << 16) |
+                 ((hash[offset + 2] & 0xff) << 8) |
+                 (hash[offset + 3] & 0xff);
+  const otp = binary % 1000000;
+  return String(otp).padStart(6, '0');
+}
+
+// Validate TOTP code with time step tolerance window of 30 seconds
+function verifyTOTP(secret, code) {
+  const time = Date.now();
+  for (let i = -1; i <= 1; i++) {
+    if (generateTOTP(secret, time + i * 30 * 1000) === code) {
+      return true;
+    }
+  }
+  return false;
+}
+
 const ALLOWED_ORIGINS = [
   'http://localhost:3000',
   'http://localhost:3001',
@@ -174,6 +223,9 @@ app.post('/api/auth/register', async (req, res) => {
     // Create user directly
     const newUser = await db.createUser(username, email, hashedPassword, 'user');
 
+    // Emit to admin panel
+    emitToAdmins('user:registered', { id: newUser.id, username: newUser.username, email: newUser.email, role: newUser.role, created_at: newUser.created_at });
+
     // Create JWT Token
     const token = jwt.sign({ userId: newUser.id, username: newUser.username }, JWT_SECRET, { expiresIn: '7d' });
     res.status(201).json({ token, username: newUser.username });
@@ -265,6 +317,9 @@ app.post('/api/auth/verify-otp', async (req, res) => {
 
     // Complete User Creation
     const newUser = await db.createUser(record.username, email, record.password, 'user');
+
+    // Emit to admin panel
+    emitToAdmins('user:registered', { id: newUser.id, username: newUser.username, email: newUser.email, role: newUser.role, created_at: newUser.created_at });
 
     // Clean up OTP record
     await db.deleteOtpVerification(email);
@@ -411,7 +466,15 @@ app.post('/api/feedback', async (req, res) => {
           'GhostChat Account Deletion Scheduled (30-day Hold)',
           `Hello ${user.username},\n\nWe received your request to delete your account. Your account has been put on a 30-day hold.\n\nYou can restore and return to your account at any time within the next 30 days simply by logging back in. If you do not log in within 30 days, your account and all associated data will be permanently deleted.`
         );
+
+        // Create deletion request record for Admin command centre
+        const delReq = await db.createDeletionRequest(user.id, user.username, message);
+        emitToAdmins('deletion:requested', delReq);
       }
+    } else {
+      // Create contact inquiry record for Admin command centre
+      const inq = await db.createContactInquiry(name || 'Anonymous', email, formattedType, message);
+      emitToAdmins('contact:new', inq);
     }
 
     res.status(201).json({ message: 'Feedback recorded successfully', feedback });
@@ -443,6 +506,9 @@ app.post('/api/reports', async (req, res) => {
       details
     });
 
+    // Notify admins about the new report
+    emitToAdmins('report:submitted', report);
+
     // Notify reporter
     if (reporter_username && !reporter_username.startsWith('Guest') && !reporter_username.startsWith('Anonymous')) {
       const reporterNotif = await db.createNotification(reporter_username, 'system', 'report_confirmed', `Your report about ${reported_username || 'a user'} has been received.`);
@@ -468,6 +534,8 @@ app.post('/api/reports', async (req, res) => {
           await db.createBan(reported_username, `Permanently banned: ${lifetimeReports} total abuse reports.`, banExpires);
           await db.deleteUser(reported_username);
 
+          emitToAdmins('ban:applied', { username: reported_username, reason: `Permanently banned: ${lifetimeReports} total abuse reports.` });
+
           if (reportedSocketId) {
             io.to(reportedSocketId).emit('account_action', {
               type: 'permanent_ban',
@@ -483,6 +551,9 @@ app.post('/api/reports', async (req, res) => {
           suspendUntil.setDate(suspendUntil.getDate() + 20);
           await db.setUserSuspension(reported_username, suspendUntil);
           const suspendNotif = await db.createNotification(reported_username, 'system', 'suspension', `Second suspension issued (${lifetimeReports} total reports). Account suspended for 20 days until ${suspendUntil.toLocaleDateString()}.`);
+          
+          emitToAdmins('ban:applied', { username: reported_username, reason: `Suspended 20 days (${lifetimeReports} total reports)`, duration: '20 days' });
+          
           if (reportedSocketId) {
             io.to(reportedSocketId).emit('new_notification', suspendNotif);
             io.to(reportedSocketId).emit('account_action', { type: 'suspended', until: suspendUntil.toISOString(), message: `Your account has been suspended for 20 days due to repeated reports.` });
@@ -494,6 +565,9 @@ app.post('/api/reports', async (req, res) => {
           suspendUntil.setDate(suspendUntil.getDate() + 20);
           await db.setUserSuspension(reported_username, suspendUntil);
           const suspendNotif = await db.createNotification(reported_username, 'system', 'suspension', `Your account has been suspended for 20 days (${lifetimeReports} reports received). Suspended until ${suspendUntil.toLocaleDateString()}.`);
+          
+          emitToAdmins('ban:applied', { username: reported_username, reason: `Suspended 20 days (${lifetimeReports} total reports)`, duration: '20 days' });
+
           if (reportedSocketId) {
             io.to(reportedSocketId).emit('new_notification', suspendNotif);
             io.to(reportedSocketId).emit('account_action', { type: 'suspended', until: suspendUntil.toISOString(), message: `Your account has been suspended for 20 days.` });
@@ -513,6 +587,7 @@ app.post('/api/reports', async (req, res) => {
       const banExpires = new Date();
       banExpires.setDate(banExpires.getDate() + 20);
       await db.createIpBan('ip', ip, `Anonymous abuse report: ${reason}`, banExpires);
+      emitToAdmins('ban:applied', { username: reported_username, reason: `Anonymous abuse report: ${reason} (IP Banned)` });
       if (fingerprint) {
         await db.createIpBan('fingerprint', fingerprint, `Anonymous abuse report: ${reason}`, banExpires);
       }
@@ -605,6 +680,10 @@ app.put('/api/profile', authenticateToken, async (req, res) => {
   const { nickname, bio, profile_img } = req.body;
   try {
     const updated = await db.updateUserProfile(req.user.username, nickname, bio, profile_img);
+
+    // Emit to admin panel
+    emitToAdmins('user:updated', { id: req.user.userId, username: req.user.username, nickname, bio, profile_img });
+
     res.json({
       message: 'Profile updated successfully',
       user: {
@@ -904,6 +983,717 @@ const onlineUsers = new Map();
 // Map of roomId -> socketId for private matches
 const privateRooms = new Map();
 
+// Admin socket namespace
+const adminIo = io.of('/admin');
+
+// Middleware: Authenticate Admin Socket connection
+adminIo.use((socket, next) => {
+  const token = socket.handshake.auth?.token;
+  if (!token) {
+    return next(new Error('Authentication error: Token required'));
+  }
+  jwt.verify(token, JWT_SECRET, async (err, decoded) => {
+    if (err) return next(new Error('Authentication error: Invalid token'));
+    const admin = await db.getAdminById(decoded.adminId);
+    if (!admin || !admin.is_active) {
+      return next(new Error('Authentication error: Admin account deactivated or missing'));
+    }
+    socket.admin = admin;
+    next();
+  });
+});
+
+adminIo.on('connection', (socket) => {
+  console.log(`🔑 Admin socket connected: ${socket.id} (User: ${socket.admin.username}, Role: ${socket.admin.role})`);
+  
+  socket.on('disconnect', () => {
+    console.log(`🔒 Admin socket disconnected: ${socket.id}`);
+  });
+});
+
+function emitToAdmins(event, payload) {
+  adminIo.emit(event, payload);
+}
+
+// --- ADMIN PANEL API CONFIGURATIONS & ENDPOINTS ---
+
+function getCookie(req, name) {
+  const cookieHeader = req.headers.cookie;
+  if (!cookieHeader) return null;
+  const cookies = cookieHeader.split(';').reduce((acc, c) => {
+    const [key, ...val] = c.trim().split('=');
+    acc[key] = val.join('=');
+    return acc;
+  }, {});
+  return cookies[name] || null;
+}
+
+function setAdminCookies(res, accessToken, refreshToken) {
+  res.cookie('admin_access_token', accessToken, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict',
+    maxAge: 15 * 60 * 1000 // 15 mins
+  });
+  res.cookie('admin_refresh_token', refreshToken, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict',
+    maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+  });
+}
+
+function clearAdminCookies(res) {
+  res.clearCookie('admin_access_token');
+  res.clearCookie('admin_refresh_token');
+}
+
+// Middleware: Authenticate Admin Access
+function authenticateAdminToken(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  let token = authHeader && authHeader.split(' ')[1];
+  if (!token) {
+    token = getCookie(req, 'admin_access_token');
+  }
+
+  if (!token) return res.status(401).json({ message: 'Admin access token required' });
+
+  jwt.verify(token, JWT_SECRET, async (err, decoded) => {
+    if (err) return res.status(403).json({ message: 'Invalid or expired admin token' });
+    
+    // Verify session in DB/JSON
+    const session = await db.getAdminSession(token);
+    if (!session || !session.is_active) {
+      return res.status(403).json({ message: 'Admin session terminated or inactive' });
+    }
+
+    const admin = await db.getAdminById(decoded.adminId);
+    if (!admin || !admin.is_active) {
+      return res.status(403).json({ message: 'Admin account deactivated or missing' });
+    }
+
+    req.admin = admin;
+    req.adminToken = token;
+    next();
+  });
+}
+
+// Middleware: Restrict by role claims
+function requireAdminRole(allowedRoles) {
+  return (req, res, next) => {
+    if (!req.admin) return res.status(401).json({ message: 'Admin auth required' });
+    if (!allowedRoles.includes(req.admin.role)) {
+      return res.status(403).json({ message: 'Permission denied: Insufficient role permissions' });
+    }
+    next();
+  };
+}
+
+// REST: Admin Login
+app.post('/api/admin/auth/login', async (req, res) => {
+  const { username, password, deviceFingerprint } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ message: 'Username and password are required' });
+  }
+
+  try {
+    const admin = await db.getAdminByUsername(username);
+    if (!admin || !admin.is_active) {
+      return res.status(400).json({ message: 'Invalid credentials or inactive account' });
+    }
+
+    // Check Lockout
+    if (admin.locked_until && new Date(admin.locked_until) > new Date()) {
+      return res.status(403).json({ message: 'Account is locked. Please try again later.' });
+    }
+
+    const match = await bcrypt.compare(password, admin.password_hash);
+    if (!match) {
+      const attempts = (admin.login_attempts || 0) + 1;
+      const updates = { login_attempts: attempts };
+      if (attempts >= 10) {
+        updates.locked_until = new Date(Date.now() + 15 * 60 * 1000); // lock 15 mins
+      }
+      await db.updateAdminUser(admin.id, updates);
+      return res.status(400).json({ message: 'Invalid credentials' });
+    }
+
+    // Reset login attempts
+    await db.updateAdminUser(admin.id, { login_attempts: 0, locked_until: null });
+
+    // If 2FA is enabled, require code challenge
+    if (admin.twofa_enabled) {
+      const tempToken = jwt.sign({ adminId: admin.id, pending2FA: true }, JWT_SECRET, { expiresIn: '5m' });
+      return res.json({ requires2FA: true, tempToken, adminId: admin.id });
+    }
+
+    // Otherwise proceed (forces 2FA setup on client side)
+    const accessToken = jwt.sign({ adminId: admin.id, username: admin.username, role: admin.role }, JWT_SECRET, { expiresIn: '15m' });
+    const refreshToken = jwt.sign({ adminId: admin.id }, JWT_SECRET, { expiresIn: '7d' });
+
+    // Save session
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.createAdminSession(admin.id, accessToken, refreshToken, new Date(Date.now() + 15 * 60 * 1000), ip, ua, deviceFingerprint || 'unknown');
+    
+    // Log login
+    await db.writeAuditLog(admin.id, admin.username, admin.role, ip, ua, deviceFingerprint || 'unknown', 'LOGIN', 'admin_users', admin.id, null, null);
+
+    setAdminCookies(res, accessToken, refreshToken);
+    res.json({
+      requires2FA: false,
+      setup2FA: true,
+      token: accessToken,
+      admin: { id: admin.id, username: admin.username, role: admin.role, password_changed: admin.password_changed }
+    });
+  } catch (err) {
+    console.error('Admin login error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Verify TOTP Code
+app.post('/api/admin/auth/2fa/verify', async (req, res) => {
+  const { code, tempToken, adminId, setupSecret } = req.body;
+  if (!code) return res.status(400).json({ message: 'Verification code is required' });
+
+  try {
+    let resolvedAdminId = adminId;
+    if (tempToken) {
+      try {
+        const decoded = jwt.verify(tempToken, JWT_SECRET);
+        resolvedAdminId = decoded.adminId;
+      } catch {
+        return res.status(400).json({ message: 'Invalid or expired login session' });
+      }
+    }
+
+    if (!resolvedAdminId) return res.status(400).json({ message: 'Admin ID required' });
+
+    const admin = await db.getAdminById(resolvedAdminId);
+    if (!admin) return res.status(400).json({ message: 'Administrator not found' });
+
+    const secret = setupSecret || admin.twofa_secret;
+    if (!secret) return res.status(400).json({ message: 'No 2FA secret set up yet' });
+
+    const verified = verifyTOTP(secret, code);
+    if (!verified) {
+      return res.status(400).json({ message: 'Invalid authenticator code' });
+    }
+
+    // If this is setup enrollment
+    if (setupSecret) {
+      await db.updateAdmin2FA(admin.id, setupSecret, true);
+      const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+      const ua = req.headers['user-agent'] || 'unknown';
+      await db.writeAuditLog(admin.id, admin.username, admin.role, ip, ua, 'unknown', '2FA_SETUP', 'admin_users', admin.id, null, null);
+      return res.json({ message: '2FA setup verified successfully!' });
+    }
+
+    // Complete login session
+    const accessToken = jwt.sign({ adminId: admin.id, username: admin.username, role: admin.role }, JWT_SECRET, { expiresIn: '15m' });
+    const refreshToken = jwt.sign({ adminId: admin.id }, JWT_SECRET, { expiresIn: '7d' });
+
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.createAdminSession(admin.id, accessToken, refreshToken, new Date(Date.now() + 15 * 60 * 1000), ip, ua, 'unknown');
+    
+    // Log login
+    await db.writeAuditLog(admin.id, admin.username, admin.role, ip, ua, 'unknown', 'LOGIN_2FA', 'admin_users', admin.id, null, null);
+
+    setAdminCookies(res, accessToken, refreshToken);
+    res.json({
+      token: accessToken,
+      admin: { id: admin.id, username: admin.username, role: admin.role, password_changed: admin.password_changed }
+    });
+  } catch (err) {
+    console.error('2FA verification failure:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Initiate 2FA Setup secret
+app.post('/api/admin/auth/2fa/setup', authenticateAdminToken, async (req, res) => {
+  const crypto = require('crypto');
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let secret = '';
+  for (let i = 0; i < 16; i++) {
+    secret += alphabet[crypto.randomInt(0, alphabet.length)];
+  }
+
+  const qrUri = `otpauth://totp/GhostChat:${req.admin.username}?secret=${secret}&issuer=GhostChat`;
+  res.json({ secret, qrUri });
+});
+
+// REST: Refresh admin session
+app.post('/api/admin/auth/refresh', async (req, res) => {
+  let token = getCookie(req, 'admin_refresh_token');
+  if (!token) return res.status(401).json({ message: 'Refresh token required' });
+
+  jwt.verify(token, JWT_SECRET, async (err, decoded) => {
+    if (err) return res.status(403).json({ message: 'Invalid refresh token' });
+    const admin = await db.getAdminById(decoded.adminId);
+    if (!admin || !admin.is_active) return res.status(403).json({ message: 'Admin inactive' });
+
+    const accessToken = jwt.sign({ adminId: admin.id, username: admin.username, role: admin.role }, JWT_SECRET, { expiresIn: '15m' });
+    const refreshToken = jwt.sign({ adminId: admin.id }, JWT_SECRET, { expiresIn: '7d' });
+
+    setAdminCookies(res, accessToken, refreshToken);
+    res.json({ token: accessToken });
+  });
+});
+
+// REST: Admin Logout
+app.post('/api/admin/auth/logout', authenticateAdminToken, async (req, res) => {
+  try {
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.deactivateAdminSession(req.adminToken);
+    await db.writeAuditLog(req.admin.id, req.admin.username, req.admin.role, ip, ua, 'unknown', 'LOGOUT', 'admin_users', req.admin.id, null, null);
+    clearAdminCookies(res);
+    res.json({ message: 'Logged out successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Current admin user profile
+app.get('/api/admin/auth/me', authenticateAdminToken, (req, res) => {
+  res.json({
+    id: req.admin.id,
+    username: req.admin.username,
+    role: req.admin.role,
+    password_changed: req.admin.password_changed,
+    twofa_enabled: req.admin.twofa_enabled
+  });
+});
+
+// REST: Super Admin users management CRUD
+app.get('/api/admin/users', authenticateAdminToken, requireAdminRole(['super_admin']), async (req, res) => {
+  try {
+    const list = await db.getAdminUsers();
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+app.post('/api/admin/users', authenticateAdminToken, requireAdminRole(['super_admin']), async (req, res) => {
+  const { username, email, password, role } = req.body;
+  if (!username || !email || !password || !role) {
+    return res.status(400).json({ message: 'All fields are required' });
+  }
+
+  try {
+    const hash = await bcrypt.hash(password, 10);
+    const newAdmin = await db.createAdminUser(username, email, hash, role);
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.writeAuditLog(req.admin.id, req.admin.username, req.admin.role, ip, ua, 'unknown', 'CREATE_ADMIN', 'admin_users', newAdmin.id, null, { username, role });
+    res.status(201).json({ message: 'Admin user created successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+app.put('/api/admin/users/:id', authenticateAdminToken, requireAdminRole(['super_admin']), async (req, res) => {
+  const { id } = req.params;
+  const { role, is_active, password } = req.body;
+  try {
+    const updates = {};
+    if (role) updates.role = role;
+    if (is_active !== undefined) updates.is_active = is_active;
+    if (password) {
+      updates.password_hash = await bcrypt.hash(password, 10);
+      updates.password_changed = false; // force change
+    }
+
+    const previous = await db.getAdminById(id);
+    const updated = await db.updateAdminUser(id, updates);
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.writeAuditLog(req.admin.id, req.admin.username, req.admin.role, ip, ua, 'unknown', 'UPDATE_ADMIN', 'admin_users', id, previous, updated);
+    res.json({ message: 'Admin updated successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+app.delete('/api/admin/users/:id', authenticateAdminToken, requireAdminRole(['super_admin']), async (req, res) => {
+  const { id } = req.params;
+  try {
+    const previous = await db.getAdminById(id);
+    await db.deleteAdminUser(id);
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.writeAuditLog(req.admin.id, req.admin.username, req.admin.role, ip, ua, 'unknown', 'DELETE_ADMIN', 'admin_users', id, previous, null);
+    res.json({ message: 'Admin deleted successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Change Password (forced or manual)
+app.post('/api/admin/auth/change-password', authenticateAdminToken, async (req, res) => {
+  const { newPassword } = req.body;
+  if (!newPassword || newPassword.length < 20) {
+    return res.status(400).json({ message: 'Password must be at least 20 characters long.' });
+  }
+
+  try {
+    const hash = await bcrypt.hash(newPassword, 10);
+    await db.updateAdminUser(req.admin.id, { password_hash: hash, password_changed: true });
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.writeAuditLog(req.admin.id, req.admin.username, req.admin.role, ip, ua, 'unknown', 'CHANGE_PASSWORD', 'admin_users', req.admin.id, null, null);
+    res.json({ message: 'Password changed successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: List platform users with filters
+app.get('/api/admin/platform/users', authenticateAdminToken, requireAdminRole(['super_admin', 'platform_admin', 'moderator']), async (req, res) => {
+  const { search, status, offset, limit } = req.query;
+  try {
+    const list = await db.getPlatformUsersFiltered(search, status, null, parseInt(offset || '0'), parseInt(limit || '50'));
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Suspend Platform User
+app.post('/api/admin/platform/users/:id/suspend', authenticateAdminToken, requireAdminRole(['super_admin', 'platform_admin', 'moderator']), async (req, res) => {
+  const { id } = req.params; // username
+  const { durationDays, reason } = req.body;
+
+  try {
+    const user = await db.getUserByUsername(id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    const expires = new Date();
+    expires.setDate(expires.getDate() + parseInt(durationDays || '20'));
+
+    await db.setUserSuspension(id, expires);
+
+    // Disconnect user socket if online
+    const socketId = onlineUsers.get(id);
+    if (socketId) {
+      io.to(socketId).emit('account_action', { type: 'suspended', until: expires.toISOString(), message: `Your account is suspended for repeated abuse: ${reason}.` });
+      const sock = io.sockets.sockets.get(socketId);
+      if (sock) sock.disconnect(true);
+    }
+
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.writeAuditLog(req.admin.id, req.admin.username, req.admin.role, ip, ua, 'unknown', 'USER_SUSPEND', 'users', id, null, { expires, reason });
+
+    emitToAdmins('ban:applied', { username: id, reason, duration: `${durationDays || 20} days` });
+
+    res.json({ message: 'User suspended successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Ban platform user
+app.post('/api/admin/platform/users/:id/ban', authenticateAdminToken, requireAdminRole(['super_admin', 'platform_admin', 'moderator']), async (req, res) => {
+  const { id } = req.params; // username
+  const { reason } = req.body;
+
+  try {
+    const user = await db.getUserByUsername(id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    await db.createBan(id, reason, null);
+
+    // Disconnect user socket if online
+    const socketId = onlineUsers.get(id);
+    if (socketId) {
+      io.to(socketId).emit('account_action', { type: 'permanent_ban', message: `Your account is permanently banned: ${reason}.` });
+      const sock = io.sockets.sockets.get(socketId);
+      if (sock) sock.disconnect(true);
+    }
+
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.writeAuditLog(req.admin.id, req.admin.username, req.admin.role, ip, ua, 'unknown', 'USER_BAN', 'users', id, null, { reason });
+
+    emitToAdmins('ban:applied', { username: id, reason });
+
+    res.json({ message: 'User banned successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Unban platform user
+app.post('/api/admin/platform/users/:id/unban', authenticateAdminToken, requireAdminRole(['super_admin', 'platform_admin', 'moderator']), async (req, res) => {
+  const { id } = req.params; // username
+  try {
+    await db.deleteBan(id);
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.writeAuditLog(req.admin.id, req.admin.username, req.admin.role, ip, ua, 'unknown', 'USER_UNBAN', 'users', id, null, null);
+
+    emitToAdmins('ban:lifted', { username: id });
+
+    res.json({ message: 'User unbanned successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Unsuspend platform user
+app.post('/api/admin/platform/users/:id/unsuspend', authenticateAdminToken, requireAdminRole(['super_admin', 'platform_admin', 'moderator']), async (req, res) => {
+  const { id } = req.params; // username
+  try {
+    await db.unsuspendUser(id);
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.writeAuditLog(req.admin.id, req.admin.username, req.admin.role, ip, ua, 'unknown', 'USER_UNSUSPEND', 'users', id, null, null);
+
+    emitToAdmins('ban:lifted', { username: id });
+
+    res.json({ message: 'User unsuspended successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Delete Platform User permanently
+app.delete('/api/admin/platform/users/:id', authenticateAdminToken, requireAdminRole(['super_admin', 'platform_admin']), async (req, res) => {
+  const { id } = req.params; // username
+  try {
+    const user = await db.getUserByUsername(id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    // Disconnect user if online
+    const socketId = onlineUsers.get(id);
+    if (socketId) {
+      io.to(socketId).emit('account_action', { type: 'permanent_ban', message: 'Your account has been deleted permanently.' });
+      const sock = io.sockets.sockets.get(socketId);
+      if (sock) sock.disconnect(true);
+    }
+
+    await db.executeUserDeletion(id);
+
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.writeAuditLog(req.admin.id, req.admin.username, req.admin.role, ip, ua, 'unknown', 'USER_DELETE', 'users', id, null, null);
+
+    emitToAdmins('deletion:executed', { username: id });
+
+    res.json({ message: 'User deleted permanently' });
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Force Logout User
+app.post('/api/admin/platform/users/:id/force-logout', authenticateAdminToken, requireAdminRole(['super_admin', 'platform_admin', 'moderator']), async (req, res) => {
+  const { id } = req.params; // username
+  try {
+    const socketId = onlineUsers.get(id);
+    if (socketId) {
+      io.to(socketId).emit('account_action', { type: 'force_logout', message: 'An administrator forced your session to terminate.' });
+      const sock = io.sockets.sockets.get(socketId);
+      if (sock) sock.disconnect(true);
+    }
+
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.writeAuditLog(req.admin.id, req.admin.username, req.admin.role, ip, ua, 'unknown', 'USER_FORCE_LOGOUT', 'users', id, null, null);
+
+    res.json({ message: 'User force-logged out' });
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Send Warning Message
+app.post('/api/admin/platform/users/:id/warn', authenticateAdminToken, requireAdminRole(['super_admin', 'platform_admin', 'moderator']), async (req, res) => {
+  const { id } = req.params; // username
+  const { message } = req.body;
+
+  try {
+    const notif = await db.createNotification(id, 'system', 'report_warning', `Warning: Admin message: ${message}`);
+    const socketId = onlineUsers.get(id);
+    if (socketId) {
+      io.to(socketId).emit('new_notification', notif);
+    }
+
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.writeAuditLog(req.admin.id, req.admin.username, req.admin.role, ip, ua, 'unknown', 'USER_WARN', 'users', id, null, { message });
+
+    res.json({ message: 'Warning sent successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Send System Notification
+app.post('/api/admin/platform/users/:id/notify', authenticateAdminToken, requireAdminRole(['super_admin', 'platform_admin', 'moderator']), async (req, res) => {
+  const { id } = req.params; // username
+  const { message } = req.body;
+
+  try {
+    const notif = await db.createNotification(id, 'system', 'system_alert', message);
+    const socketId = onlineUsers.get(id);
+    if (socketId) {
+      io.to(socketId).emit('new_notification', notif);
+    }
+
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.writeAuditLog(req.admin.id, req.admin.username, req.admin.role, ip, ua, 'unknown', 'USER_NOTIFY', 'users', id, null, { message });
+
+    res.json({ message: 'Notification sent successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: List Reports
+app.get('/api/admin/reports', authenticateAdminToken, requireAdminRole(['super_admin', 'platform_admin', 'moderator']), async (req, res) => {
+  try {
+    const list = await db.getReportsWithDetails();
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Resolve Report
+app.put('/api/admin/reports/:id/resolve', authenticateAdminToken, requireAdminRole(['super_admin', 'platform_admin', 'moderator']), async (req, res) => {
+  const { id } = req.params;
+  try {
+    // mark resolved
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.writeAuditLog(req.admin.id, req.admin.username, req.admin.role, ip, ua, 'unknown', 'REPORT_RESOLVE', 'reports', id, null, null);
+    res.json({ message: 'Report resolved' });
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Contacts
+app.get('/api/admin/contacts', authenticateAdminToken, requireAdminRole(['super_admin', 'platform_admin', 'support_admin']), async (req, res) => {
+  try {
+    const list = await db.getContactInquiries();
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+app.get('/api/admin/contacts/:id', authenticateAdminToken, requireAdminRole(['super_admin', 'platform_admin', 'support_admin']), async (req, res) => {
+  const { id } = req.params;
+  try {
+    const details = await db.getContactInquiryById(id);
+    res.json(details);
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+app.post('/api/admin/contacts/:id/reply', authenticateAdminToken, requireAdminRole(['super_admin', 'platform_admin', 'support_admin']), async (req, res) => {
+  const { id } = req.params;
+  const { reply } = req.body;
+
+  try {
+    await db.createContactReply(id, req.admin.id, reply);
+    await db.updateContactInquiryStatus(id, 'resolved', req.admin.id);
+
+    // If inquirer user is online, emit WS update
+    const inquiry = await db.getContactInquiryById(id);
+    if (inquiry && inquiry.username) {
+      const userSocketId = onlineUsers.get(inquiry.username);
+      if (userSocketId) {
+        io.to(userSocketId).emit('contact_reply', { inquiryId: id, reply });
+      }
+    }
+
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.writeAuditLog(req.admin.id, req.admin.username, req.admin.role, ip, ua, 'unknown', 'CONTACT_REPLY', 'contact_inquiries', id, null, { reply });
+
+    emitToAdmins('contact:replied', { inquiryId: id, reply });
+
+    res.json({ message: 'Reply sent and inquiry marked resolved' });
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Deletion Requests list
+app.get('/api/admin/deletion-requests', authenticateAdminToken, requireAdminRole(['super_admin', 'platform_admin', 'support_admin']), async (req, res) => {
+  try {
+    const list = await db.getDeletionRequests();
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+app.post('/api/admin/deletion-requests/:id/execute', authenticateAdminToken, requireAdminRole(['super_admin', 'platform_admin']), async (req, res) => {
+  const { id } = req.params;
+  const { username } = req.body;
+
+  try {
+    await db.executeUserDeletion(username);
+    await db.resolveDeletionRequest(id, 'deleted', req.admin.id);
+
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.writeAuditLog(req.admin.id, req.admin.username, req.admin.role, ip, ua, 'unknown', 'DELETION_EXECUTE', 'deletion_requests', id, null, { username });
+
+    emitToAdmins('deletion:executed', { username });
+
+    res.json({ message: 'User data purged successfully!' });
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Metrics analytics
+app.get('/api/admin/analytics/metrics', authenticateAdminToken, async (req, res) => {
+  try {
+    const metrics = await db.getAdminMetrics();
+    // Add real-time online count
+    metrics.onlineCount = totalOnline;
+    res.json(metrics);
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Audit trail log search
+app.get('/api/admin/audit', authenticateAdminToken, requireAdminRole(['super_admin']), async (req, res) => {
+  try {
+    const list = await db.getAuditLogs();
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Server Health status
+app.get('/api/admin/health', authenticateAdminToken, (req, res) => {
+  const os = require('os');
+  res.json({
+    status: 'healthy',
+    cpuUsage: os.loadavg()[0] * 100 / os.cpus().length,
+    freeMemPercent: os.freemem() * 100 / os.totalmem(),
+    uptime: os.uptime(),
+    dbStatus: 'connected',
+    onlineSockets: totalOnline
+  });
+});
+
 // Map of socketId → User state
 const users = new Map();
 
@@ -1011,8 +1801,6 @@ io.use((socket, next) => {
 });
 
 io.on('connection', async (socket) => {
-  const ip = socket.handshake.address || socket.conn.remoteAddress || '127.0.0.1';
-
   // Check IP Ban
   const rawIp = socket.handshake.address || socket.conn.remoteAddress || '127.0.0.1';
   const ip = rawIp.replace('::ffff:', '');
@@ -1045,6 +1833,10 @@ io.on('connection', async (socket) => {
   broadcastOnlineCount();
 
   const connUsername = socket.user?.username || 'Guest_' + Math.floor(1000 + Math.random() * 9000);
+
+  // Emit to admin panel
+  emitToAdmins('user:online', { username: connUsername, status: 'online' });
+  emitToAdmins('metrics:update', { onlineCount: totalOnline });
 
   if (socket.user && !socket.user.isAnonymous) {
     onlineUsers.set(socket.user.username, socket.id);
@@ -1289,8 +2081,15 @@ io.on('connection', async (socket) => {
 
   // Disconnection
   socket.on('disconnect', () => {
+    const userVal = users.get(socket.id);
+    const connUsername = userVal ? userVal.username : 'Unknown';
     totalOnline--;
     broadcastOnlineCount();
+
+    // Emit to admin panel
+    emitToAdmins('user:online', { username: connUsername, status: 'offline' });
+    emitToAdmins('metrics:update', { onlineCount: totalOnline });
+
     disconnectFromPartner(socket.id);
     removeFromQueue(socket.id);
     users.delete(socket.id);
