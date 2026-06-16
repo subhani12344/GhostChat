@@ -7,7 +7,7 @@ import AuthModal from '@/components/AuthModal';
 import { Mail, CheckCircle, Trash2 } from 'lucide-react';
 
 export default function ContactUs() {
-  const [onlineCount, setOnlineCount] = useState(14285);
+  const [onlineCount, setOnlineCount] = useState(0);
   const [user, setUser] = useState<{ username: string } | null>(null);
   const [authOpen, setAuthOpen] = useState(false);
   const serverUrl = (typeof window !== "undefined" && (window as any).GHOSTCHAT_SERVER_URL) || process.env.NEXT_PUBLIC_SERVER_URL || "https://ghostchat-backend.onrender.com";
@@ -26,7 +26,7 @@ export default function ContactUs() {
 
     fetch(`${serverUrl}/health`)
       .then((res) => res.json())
-      .then((data) => setOnlineCount(data.online || 14285))
+      .then((data) => setOnlineCount(data.online || 0))
       .catch(() => {});
   }, [serverUrl]);
 
