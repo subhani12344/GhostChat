@@ -256,34 +256,23 @@ export default function VideoTile({
 
   // Attach local stream
   useEffect(() => {
-    if (localVideoRef.current && localStream && chatMode === 'video') {
-      localVideoRef.current.srcObject = localStream;
+    const videoEl = localVideoRef.current;
+    if (videoEl && localStream && chatMode === 'video') {
+      videoEl.srcObject = localStream;
+      videoEl.play().catch(err => {
+        console.warn("Failed to autoplay local video:", err);
+      });
     }
   }, [localStream, isCamOn, chatMode]);
 
   // Attach remote stream
   useEffect(() => {
-    const video = remoteVideoRef.current;
-    if (video && remoteStream && chatMode === 'video') {
-      video.srcObject = remoteStream;
-      video.muted = false;
-      video.volume = 1.0;
-
-      const playVideo = async () => {
-        try {
-          await video.play();
-          console.log("Remote video/audio playing successfully.");
-        } catch (err) {
-          console.warn("Autoplay block detected. Attaching gesture fallback to start audio...", err);
-          const playOnGesture = () => {
-            video.play().then(() => {
-              document.removeEventListener('click', playOnGesture);
-            }).catch(e => console.error("Gesture play failed:", e));
-          };
-          document.addEventListener('click', playOnGesture);
-        }
-      };
-      playVideo();
+    const videoEl = remoteVideoRef.current;
+    if (videoEl && remoteStream && chatMode === 'video') {
+      videoEl.srcObject = remoteStream;
+      videoEl.play().catch(err => {
+        console.warn("Failed to autoplay remote video:", err);
+      });
     }
   }, [remoteStream, isConnected, chatMode]);
 
@@ -462,7 +451,7 @@ export default function VideoTile({
       </div>
 
       {/* 2. LOCAL USER PIP PREVIEW */}
-      <div className="absolute right-4 top-4 z-20 h-28 w-20 overflow-hidden rounded-xl border border-white/20 bg-brand-gray-dark/80 shadow-lg sm:bottom-4 sm:left-4 sm:right-auto sm:top-auto sm:h-36 sm:w-28 transition-all duration-300">
+      <div className="absolute right-4 bottom-4 z-20 h-28 w-20 overflow-hidden rounded-xl border border-white/20 bg-brand-gray-dark/80 shadow-lg sm:h-36 sm:w-28 transition-all duration-300">
         {isCamOn && localStream ? (
           <video
             ref={localVideoRef}
