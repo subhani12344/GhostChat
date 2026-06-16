@@ -99,12 +99,14 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
   const [incomingInvite, setIncomingInvite] = useState<{ senderUsername: string; roomId: string } | null>(null);
 
   // --- Viewport Resize Adjustments ---
-  const [viewportHeight, setViewportHeight] = useState('100vh');
+  const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handleResize = () => {
       // Set viewport height dynamically to solve 100vh issue on mobile
-      setViewportHeight(`${window.innerHeight}px`);
+      if (containerRef.current) {
+        containerRef.current.style.height = `${window.innerHeight}px`;
+      }
     };
     handleResize();
     window.addEventListener('resize', handleResize);
@@ -606,7 +608,7 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
 
   return (
     <div
-      style={{ height: viewportHeight }}
+      ref={containerRef}
       className="flex w-full flex-col overflow-hidden bg-brand-gray-light"
     >
       <Navbar
