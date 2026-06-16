@@ -35,6 +35,8 @@ export default function ProfileDrawer({
   const [saveLoading, setSaveLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileLoadError, setProfileLoadError] = useState<string | null>(null);
 
   // Tabs for follower lists: null | 'followers' | 'following'
   const [activeListTab, setActiveListTab] = useState<'followers' | 'following' | null>(null);
@@ -61,19 +63,36 @@ export default function ProfileDrawer({
     const token = localStorage.getItem('ghostchat_token');
     if (!token) return;
 
+    setProfileLoading(true);
+    setProfileLoadError(null);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+
     try {
       const res = await fetch(`${serverUrl}/api/users/${currentUser.username}/profile`, {
-        headers: { 'Authorization': `Bearer ${token}` }
+        headers: { 'Authorization': `Bearer ${token}` },
+        signal: controller.signal
       });
+      clearTimeout(timeoutId);
       if (res.ok) {
         const data = await res.json();
         setProfile(data);
         setNickname(data.nickname || '');
         setBio(data.bio || '');
         setProfileImg(data.profile_img || '');
+      } else {
+        setProfileLoadError('Failed to load profile. Please try again.');
       }
-    } catch (err) {
-      console.error('Failed to load self profile:', err);
+    } catch (err: any) {
+      clearTimeout(timeoutId);
+      if (err.name === 'AbortError') {
+        setProfileLoadError('Server is taking too long to respond. It may be waking up — please try again in a moment.');
+      } else {
+        setProfileLoadError('Connection failed. Please check your internet and try again.');
+      }
+    } finally {
+      setProfileLoading(false);
     }
   };
 
@@ -479,6 +498,30 @@ export default function ProfileDrawer({
                     </button>
                   )}
                 </div>
+              </div>
+            ) : profileLoading ? (
+              <div className="flex flex-col items-center justify-center py-12 space-y-4">
+                <div className="h-6 w-6 animate-spin rounded-full border-2 border-brand-black border-t-transparent" />
+                <div className="text-center space-y-1">
+                  <p className="text-xs font-bold text-brand-black/60">Loading your profile...</p>
+                  <p className="text-[10px] text-brand-black/40">If this takes too long, the server may be waking up.</p>
+                </div>
+              </div>
+            ) : profileLoadError ? (
+              <div className="flex flex-col items-center justify-center py-12 space-y-4 text-center px-4">
+                <div className="w-12 h-12 rounded-full bg-red-50 border border-red-100 flex items-center justify-center text-red-500">
+                  <svg width="20" height="20" fill="none" viewBox="0 0 24 24"><path stroke="currentColor" strokeWidth="2" strokeLinecap="round" d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-xs font-bold text-brand-black">Could not load profile</p>
+                  <p className="text-[10px] text-brand-black/55 leading-relaxed">{profileLoadError}</p>
+                </div>
+                <button
+                  onClick={fetchMyProfile}
+                  className="rounded-xl bg-brand-black px-5 py-2.5 text-xs font-bold uppercase tracking-wider text-white hover:bg-brand-black/90 active:scale-95 transition-all cursor-pointer"
+                >
+                  Try Again
+                </button>
               </div>
             ) : !profile ? (
               <div className="flex flex-col items-center justify-center py-12">

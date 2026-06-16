@@ -11,7 +11,7 @@ import TermsModal from './TermsModal';
 import PeerProfileCard from './PeerProfileCard';
 import AuthModal from './AuthModal';
 import Navbar from './Navbar';
-import { Video, MessageSquare, Volume2, VideoOff, MicOff, RefreshCw, Square, ShieldAlert, UserCheck, PhoneCall } from 'lucide-react';
+import { Video, MessageSquare, Volume2, VideoOff, MicOff, RefreshCw, Square, ShieldAlert, UserCheck, PhoneCall, SlidersHorizontal } from 'lucide-react';
 
 interface Message {
   id: string;
@@ -97,6 +97,7 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
   const [isOfflineSim, setIsOfflineSim] = useState(false);
   const [incomingFollowRequest, setIncomingFollowRequest] = useState<string | null>(null);
   const [incomingInvite, setIncomingInvite] = useState<{ senderUsername: string; roomId: string } | null>(null);
+  const [showVideoFilters, setShowVideoFilters] = useState(false);
 
   // --- Viewport Resize Adjustments ---
   const containerRef = useRef<HTMLDivElement>(null);
@@ -130,7 +131,7 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
         setLocalStream(stream);
       } catch (err) {
         console.warn('Physical camera/mic denied or missing. Bootstrapping dummy stream for testing...', err);
-        // Fallback: Generate dummy video stream via canvas
+        // Fallback: Generate dummy silent video stream via canvas
         const canvas = document.createElement('canvas');
         canvas.width = 640;
         canvas.height = 480;
@@ -138,20 +139,21 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
         let frame = 0;
         const intervalId = setInterval(() => {
           if (ctx) {
-            ctx.fillStyle = '#111';
+            ctx.fillStyle = '#111827';
             ctx.fillRect(0, 0, 640, 480);
-            ctx.fillStyle = '#fff';
-            ctx.font = '24px sans-serif';
-            ctx.fillText(`Local Camera Simulator [Frame ${frame++}]`, 40, 240);
-            ctx.beginPath();
-            ctx.arc(320, 320, 20 + Math.sin(frame * 0.1) * 10, 0, Math.PI * 2);
-            ctx.fillStyle = '#f5f5f5';
-            ctx.fill();
+            ctx.fillStyle = 'rgba(255,255,255,0.15)';
+            ctx.font = 'bold 18px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('Camera Unavailable', 320, 230);
+            ctx.font = '14px sans-serif';
+            ctx.fillStyle = 'rgba(255,255,255,0.08)';
+            ctx.fillText(`Allow camera access to share your video`, 320, 260);
+            frame++;
           }
-        }, 100);
+        }, 200);
 
         try {
-          const dummyVideoTrack = (canvas as any).captureStream(15).getVideoTracks()[0];
+          const dummyVideoTrack = (canvas as any).captureStream(5).getVideoTracks()[0];
           const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
           const oscillator = audioContext.createOscillator();
           const dst = audioContext.createMediaStreamDestination();
@@ -642,9 +644,9 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
           }`}
         >
           
-          {/* Filters overlay */}
-          {!isConnected && !isMatching && (
-            <div className={chatMode === 'video' ? 'absolute top-4 left-4 right-4 z-30 lg:relative lg:top-auto lg:left-auto lg:right-auto lg:z-10' : ''}>
+          {/* Filters overlay: only show in text mode before match */}
+          {chatMode === 'text' && !isConnected && !isMatching && (
+            <div>
               <MatchingFilters
                 interests={interests}
                 setInterests={setInterests}
@@ -685,7 +687,22 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
           >
             {/* Start / Stop matching */}
             {!isConnected && !isMatching ? (
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2 justify-center">
+                {/* Video mode: filters toggle button */}
+                {chatMode === 'video' && (
+                  <button
+                    onClick={() => setShowVideoFilters(v => !v)}
+                    className={`flex items-center gap-1.5 rounded-xl border px-4 py-3 text-xs font-bold uppercase tracking-wider transition-all active:scale-95 cursor-pointer ${
+                      showVideoFilters
+                        ? 'border-white/40 bg-white/20 text-white'
+                        : 'border-white/20 bg-white/10 text-white/70 hover:bg-white/20 hover:text-white'
+                    }`}
+                    title="Matchmaking Filters"
+                  >
+                    <SlidersHorizontal size={14} />
+                    Filters
+                  </button>
+                )}
                 <button
                   onClick={handleStartChat}
                   className={`flex items-center gap-1.5 rounded-xl px-6 py-3 text-xs font-bold uppercase tracking-wider transition-all active:scale-95 shadow-sm cursor-pointer ${
@@ -794,7 +811,25 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
           </div>
         </div>
 
-        {/* RIGHT COLUMN: Text Chat Panel */}
+        {/* VIDEO MODE: Collapsible filter panel, shown above controls bar */}
+        {chatMode === 'video' && showVideoFilters && !isConnected && !isMatching && (
+          <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-40 w-[90%] max-w-md animate-in fade-in slide-in-from-bottom-3 duration-200">
+            <div className="rounded-2xl border border-white/10 bg-black/75 backdrop-blur-md p-4 shadow-2xl">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-white/60">Matchmaking Filters</span>
+                <button onClick={() => setShowVideoFilters(false)} className="text-white/40 hover:text-white transition-colors text-xs">✕</button>
+              </div>
+              <MatchingFilters
+                interests={interests}
+                setInterests={setInterests}
+                language={language}
+                setLanguage={setLanguage}
+                country={country}
+                setCountry={setCountry}
+              />
+            </div>
+          </div>
+        )}
         <div
           className={`${
             chatMode === 'video'

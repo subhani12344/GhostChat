@@ -227,7 +227,7 @@ export default function NotificationCenter({
 
       {/* Dropdown Panel */}
       {open && (
-        <div className="absolute right-0 mt-2.5 w-80 rounded-2xl border border-brand-gray-mid/45 bg-white py-3 shadow-2xl z-50 animate-in fade-in slide-in-from-top-3 duration-200">
+        <div className="absolute right-0 mt-2.5 w-80 rounded-2xl border border-brand-gray-mid/45 bg-white py-3 shadow-2xl z-[200] animate-in fade-in slide-in-from-top-3 duration-200">
           <div className="flex items-center justify-between border-b border-brand-gray-mid/30 px-4 pb-2 mb-2">
             <span className="text-xs font-bold uppercase tracking-wider text-brand-black">Notifications</span>
             {unreadCount > 0 && (
