@@ -10,8 +10,33 @@ require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 const { db, initDb } = require('./db');
 
+const ALLOWED_ORIGINS = [
+  'http://localhost:3000',
+  'http://localhost:3001',
+  'https://ghost-chat-taupe.vercel.app',
+  'https://ghostchat.vercel.app',
+  // Allow all vercel.app preview URLs:
+  /\.vercel\.app$/,
+  // Allow all render.com URLs:
+  /\.onrender\.com$/
+];
+
 const app = express();
-app.use(cors({ origin: '*' }));
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true); // allow server-to-server
+    if (
+      ALLOWED_ORIGINS.some(o =>
+        typeof o === 'string' ? o === origin : o.test(origin)
+      )
+    ) {
+      return callback(null, true);
+    }
+    // Fall-through: allow all for now (remove in paid tier)
+    return callback(null, true);
+  },
+  credentials: true
+}));
 app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ limit: '15mb', extended: true }));
 
@@ -21,7 +46,10 @@ const io = new Server(server, {
   cors: {
     origin: '*',
     methods: ['GET', 'POST']
-  }
+  },
+  transports: ['websocket', 'polling'],
+  pingTimeout: 60000,
+  pingInterval: 25000
 });
 
 const JWT_SECRET = process.env.JWT_SECRET || 'ghostchat_secure_secret_key';
@@ -1124,6 +1152,11 @@ io.on('connection', async (socket) => {
   });
 });
 
+// Root route - quick alive check
+app.get('/', (req, res) => {
+  res.json({ service: 'GhostChat Signaling Server', status: 'online', version: '2.0.0' });
+});
+
 // Health metrics
 app.get('/health', async (req, res) => {
   try {
@@ -1150,7 +1183,24 @@ app.get('/health', async (req, res) => {
 // Run Init Db, then start Server
 const PORT = process.env.PORT || 4000;
 initDb().then(() => {
-  server.listen(PORT, () => {
+  server.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Signaling server running on port ${PORT}`);
+
+    // Keep-alive self-ping: prevents Render free-tier from sleeping (14 min interval)
+    if (process.env.NODE_ENV === 'production') {
+      const SELF_URL = process.env.RENDER_EXTERNAL_URL || `https://ghostchat-backend.onrender.com`;
+      setInterval(async () => {
+        try {
+          const https = require('https');
+          https.get(`${SELF_URL}/health`, (res) => {
+            console.log(`💓 Keep-alive ping: ${res.statusCode}`);
+          }).on('error', (e) => {
+            console.warn(`Keep-alive ping failed: ${e.message}`);
+          });
+        } catch (e) {
+          console.warn('Keep-alive error:', e.message);
+        }
+      }, 14 * 60 * 1000); // every 14 minutes
+    }
   });
 });

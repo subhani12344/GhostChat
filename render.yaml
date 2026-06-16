@@ -1,6 +1,8 @@
 databases:
   - name: ghostchat-db
     plan: free
+    databaseName: ghostchat
+    user: ghostchat
 
 services:
   - type: web
@@ -9,9 +11,8 @@ services:
     rootDir: backend
     buildCommand: npm install
     startCommand: node server.js
+    healthCheckPath: /health
     envVars:
-      - key: PORT
-        value: 4000
       - key: DATABASE_URL
         fromDatabase:
           name: ghostchat-db
@@ -20,14 +21,4 @@ services:
         generateValue: true
       - key: NODE_ENV
         value: production
-    plan: free
-
-  - type: web
-    name: ghostchat-frontend
-    env: node
-    buildCommand: npm install
-    startCommand: npm run build && npm start
-    envVars:
-      - key: NEXT_PUBLIC_SERVER_URL
-        value: https://ghostchat-backend.onrender.com
     plan: free
