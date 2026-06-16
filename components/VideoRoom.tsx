@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import io, { Socket } from 'socket.io-client';
 import { useRouter } from 'next/navigation';
 import VideoTile from './VideoTile';
@@ -11,13 +11,19 @@ import TermsModal from './TermsModal';
 import PeerProfileCard from './PeerProfileCard';
 import AuthModal from './AuthModal';
 import Navbar from './Navbar';
-import { Video, MessageSquare, Volume2, VideoOff, MicOff, RefreshCw, Square, ShieldAlert, UserCheck, PhoneCall, SlidersHorizontal } from 'lucide-react';
+import { Video, MessageSquare, Volume2, VideoOff, MicOff, RefreshCw, Square, UserCheck, PhoneCall } from 'lucide-react';
 
 interface Message {
   id: string;
   sender: 'self' | 'stranger' | 'system';
   text: string;
   timestamp: string;
+}
+
+interface CurrentUser {
+  username: string;
+  isAnonymous?: boolean;
+  token?: string;
 }
 
 interface VideoRoomProps {
@@ -33,49 +39,43 @@ const ICE_SERVERS = {
   ]
 };
 
+// Read user from localStorage without causing useEffect state-set cascade
+function readStoredUser(): CurrentUser | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const stored = localStorage.getItem('ghostchat_user');
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (parsed?.username) return parsed as CurrentUser;
+    }
+  } catch (_) {}
+  return null;
+}
+
+function readTermsAccepted(): boolean {
+  if (typeof window === 'undefined') return true;
+  return localStorage.getItem('ghostchat_terms_accepted') === 'true';
+}
+
 export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
   const router = useRouter();
-  const [showTerms, setShowTerms] = useState(false);
-  const [username, setUsername] = useState('');
-  const [partnerUsername, setPartnerUsername] = useState<string | null>(null);
-  const [currentUser, setCurrentUser] = useState<any>(null);
+
+  // Initialise directly from localStorage — no synchronous setState in effects
+  const [showTerms, setShowTerms] = useState<boolean>(() => !readTermsAccepted());
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(() => readStoredUser());
+  const [username, setUsername] = useState<string>(() => readStoredUser()?.username ?? '');
+
   const [showMobileChat, setShowMobileChat] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
   const [onlineCount, setOnlineCount] = useState(0);
 
-  useEffect(() => {
-    const accepted = localStorage.getItem('ghostchat_terms_accepted') === 'true';
-    if (!accepted) {
-      setShowTerms(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    const token = localStorage.getItem('ghostchat_token');
-    const stored = localStorage.getItem('ghostchat_user');
-    if (!token || !stored) {
-      router.push('/');
-      return;
-    }
-    try {
-      const parsed = JSON.parse(stored);
-      if (parsed?.username) {
-        setUsername(parsed.username);
-        setCurrentUser(parsed);
-      } else {
-        router.push('/');
-      }
-    } catch (err) {
-      router.push('/');
-    }
-  }, [router]);
-
   // Socket & WebRTC refs
   const socketRef = useRef<Socket | null>(null);
+  const [socket, setSocket] = useState<Socket | null>(null); // state copy to safely pass to children during render
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
 
-  // Filter preferences
+  // Filter preferences (text mode only)
   const [interests, setInterests] = useState<string[]>([]);
   const [language, setLanguage] = useState('all');
   const [country, setCountry] = useState('all');
@@ -90,21 +90,18 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
   const [isConnected, setIsConnected] = useState(false);
   const [isMatching, setIsMatching] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [isTyping, setIsTyping] = useState(false);
+  const [partnerUsername, setPartnerUsername] = useState<string | null>(null);
   const [strangerTyping, setStrangerTyping] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [isOfflineSim, setIsOfflineSim] = useState(false);
   const [incomingFollowRequest, setIncomingFollowRequest] = useState<string | null>(null);
   const [incomingInvite, setIncomingInvite] = useState<{ senderUsername: string; roomId: string } | null>(null);
-  const [showVideoFilters, setShowVideoFilters] = useState(false);
 
-  // --- Viewport Resize Adjustments ---
+  // Viewport Resize Adjustments
   const containerRef = useRef<HTMLDivElement>(null);
-
   useEffect(() => {
     const handleResize = () => {
-      // Set viewport height dynamically to solve 100vh issue on mobile
       if (containerRef.current) {
         containerRef.current.style.height = `${window.innerHeight}px`;
       }
@@ -118,7 +115,52 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
     };
   }, []);
 
-  // --- Initialize Media ---
+  // Redirect if not logged in (read synchronously, redirect is a side-effect)
+  useEffect(() => {
+    const token = localStorage.getItem('ghostchat_token');
+    const stored = localStorage.getItem('ghostchat_user');
+    if (!token || !stored) {
+      router.push('/');
+    }
+  }, [router]);
+
+  // ─── Stable helpers via useRef so they can safely be called inside effects ───
+  const appendMessageRef = useRef<(sender: 'self' | 'stranger' | 'system', text: string) => void>();
+  const appendMessage = useCallback((sender: 'self' | 'stranger' | 'system', text: string) => {
+    const formattedTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    setMessages((prev) => [
+      ...prev,
+      { id: Math.random().toString(36).substr(2), sender, text, timestamp: formattedTime }
+    ]);
+  }, []);
+  appendMessageRef.current = appendMessage;
+
+  const appendSystemMessage = useCallback((text: string) => {
+    appendMessageRef.current?.('system', text);
+  }, []);
+
+  const stopLocalTracksRef = useRef<() => void>();
+  const stopLocalTracks = useCallback(() => {
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach((track) => track.stop());
+      localStreamRef.current = null;
+      setLocalStream(null);
+    }
+  }, []);
+  stopLocalTracksRef.current = stopLocalTracks;
+
+  const cleanPeerConnectionRef = useRef<() => void>();
+  const cleanPeerConnection = useCallback(() => {
+    if (peerRef.current) {
+      peerRef.current.close();
+      peerRef.current = null;
+    }
+    setRemoteStream(null);
+    setPartnerUsername(null);
+  }, []);
+  cleanPeerConnectionRef.current = cleanPeerConnection;
+
+  // ─── Initialize Media ────────────────────────────────────────────────────
   useEffect(() => {
     async function initMedia() {
       if (chatMode === 'text') return;
@@ -129,14 +171,12 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
         });
         localStreamRef.current = stream;
         setLocalStream(stream);
-      } catch (err) {
-        console.warn('Physical camera/mic denied or missing. Bootstrapping dummy stream for testing...', err);
-        // Fallback: Generate dummy silent video stream via canvas
+      } catch {
+        console.warn('Camera/mic denied. Creating canvas fallback stream.');
         const canvas = document.createElement('canvas');
         canvas.width = 640;
         canvas.height = 480;
         const ctx = canvas.getContext('2d');
-        let frame = 0;
         const intervalId = setInterval(() => {
           if (ctx) {
             ctx.fillStyle = '#111827';
@@ -147,24 +187,26 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
             ctx.fillText('Camera Unavailable', 320, 230);
             ctx.font = '14px sans-serif';
             ctx.fillStyle = 'rgba(255,255,255,0.08)';
-            ctx.fillText(`Allow camera access to share your video`, 320, 260);
-            frame++;
+            ctx.fillText('Allow camera access to share your video', 320, 260);
           }
         }, 200);
 
         try {
-          const dummyVideoTrack = (canvas as any).captureStream(5).getVideoTracks()[0];
-          const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-          const oscillator = audioContext.createOscillator();
-          const dst = audioContext.createMediaStreamDestination();
-          oscillator.connect(dst);
-          const dummyAudioTrack = dst.stream.getAudioTracks()[0];
-          
-          const stream = new MediaStream([dummyVideoTrack, dummyAudioTrack]);
-          localStreamRef.current = stream;
-          setLocalStream(stream);
+          const canvasAny = canvas as HTMLCanvasElement & { captureStream(fps?: number): MediaStream };
+          const dummyVideoTrack = canvasAny.captureStream(5).getVideoTracks()[0];
+          const AudioCtx = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+          if (AudioCtx) {
+            const audioContext = new AudioCtx();
+            const oscillator = audioContext.createOscillator();
+            const dst = audioContext.createMediaStreamDestination();
+            oscillator.connect(dst);
+            const dummyAudioTrack = dst.stream.getAudioTracks()[0];
+            const stream = new MediaStream([dummyVideoTrack, dummyAudioTrack]);
+            localStreamRef.current = stream;
+            setLocalStream(stream);
+          }
         } catch (e) {
-          console.error('Failed to create dummy stream fallback', e);
+          console.error('Dummy stream fallback failed:', e);
         }
 
         return () => clearInterval(intervalId);
@@ -173,88 +215,72 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
     initMedia();
 
     return () => {
-      stopLocalTracks();
+      stopLocalTracksRef.current?.();
     };
   }, [chatMode]);
 
-  const stopLocalTracks = () => {
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((track) => track.stop());
-      localStreamRef.current = null;
-      setLocalStream(null);
-    }
-  };
-
+  // ─── Socket.IO connection ────────────────────────────────────────────────
   useEffect(() => {
-    console.log(`🔌 Connecting to GhostChat hub at: ${serverUrl}`);
     const token = localStorage.getItem('ghostchat_token');
-    const socket = io(serverUrl, {
+    const sock = io(serverUrl, {
       reconnectionAttempts: 3,
       timeout: 5000,
       auth: { token }
     });
-    socketRef.current = socket;
+    socketRef.current = sock;
+    setSocket(sock);
 
-    socket.on('connect', () => {
-      console.log('✅ Connected to signaling server');
+    sock.on('connect', () => {
       setIsOfflineSim(false);
-      appendSystemMessage('Connected to server. Ready to match.');
+      appendMessageRef.current?.('system', 'Connected to server. Ready to match.');
 
-      // Auto join private room if parameter exists
       const urlParams = new URLSearchParams(window.location.search);
       const roomParam = urlParams.get('room');
+      const storedUser = readStoredUser();
       if (roomParam) {
-        socket.emit('join_private_room', { roomId: roomParam, username });
+        sock.emit('join_private_room', { roomId: roomParam, username: storedUser?.username ?? '' });
         setIsMatching(true);
-        appendSystemMessage(`Connecting to private room: ${roomParam}...`);
+        appendMessageRef.current?.('system', `Connecting to private room: ${roomParam}...`);
       }
     });
 
-    socket.on('connect_error', () => {
+    sock.on('connect_error', () => {
       setIsOfflineSim(false);
       setIsMatching(false);
-      appendSystemMessage('Unable to reach the GhostChat server. Please try again in a moment.');
+      appendMessageRef.current?.('system', 'Unable to reach the GhostChat server. Please try again in a moment.');
     });
 
-    socket.on('online_count', (count: number) => {
+    sock.on('online_count', (count: number) => {
       setOnlineCount(count);
     });
 
-    socket.on('waiting', () => {
+    sock.on('waiting', () => {
       setIsMatching(true);
       setIsConnected(false);
-      appendSystemMessage('Searching for a match matching your preferences...');
+      appendMessageRef.current?.('system', 'Searching for a match matching your preferences...');
     });
 
-    socket.on('matched', async ({ initiator, partnerId, partnerUsername }: { initiator: boolean; partnerId: string; partnerUsername?: string }) => {
-      console.log(`Matched with peer: ${partnerId}. Initiator: ${initiator} | Username: ${partnerUsername}`);
+    sock.on('matched', async ({ initiator, partnerId, partnerUsername: pUser }: { initiator: boolean; partnerId: string; partnerUsername?: string }) => {
+      console.log(`Matched: ${partnerId} initiator=${initiator}`);
       setIsMatching(false);
       setIsConnected(true);
       setMessages([]);
-      setPartnerUsername(partnerUsername || null);
-      appendSystemMessage('You are paired with a stranger! Say hello.');
+      setPartnerUsername(pUser ?? null);
+      appendMessageRef.current?.('system', 'You are paired with a stranger! Say hello.');
 
-      // Clear previous peer connection
-      cleanPeerConnection();
+      cleanPeerConnectionRef.current?.();
 
-      // Create new peer connection
       const pc = new RTCPeerConnection(ICE_SERVERS);
       peerRef.current = pc;
 
-      // Add local stream tracks
       if (localStreamRef.current) {
         localStreamRef.current.getTracks().forEach((track) => {
           pc.addTrack(track, localStreamRef.current!);
         });
       }
 
-      // Handle remote tracks
-      pc.ontrack = (event) => {
-        console.log('Got remote track', event.streams[0]);
-        setRemoteStream(event.streams[0]);
-      };
+      pc.ontrack = (event) => setRemoteStream(event.streams[0]);
 
-      // Relay ICE candidates
       pc.onicecandidate = (event) => {
         if (event.candidate) {
           socketRef.current?.emit('ice_candidate', { candidate: event.candidate });
@@ -267,12 +293,12 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
           await pc.setLocalDescription(offer);
           socketRef.current?.emit('offer', { offer });
         } catch (e) {
-          console.error('Failed to create offer', e);
+          console.error('Failed to create offer:', e);
         }
       }
     });
 
-    socket.on('offer', async ({ offer }: { offer: RTCSessionDescriptionInit }) => {
+    sock.on('offer', async ({ offer }: { offer: RTCSessionDescriptionInit }) => {
       const pc = peerRef.current;
       if (!pc) return;
       try {
@@ -281,104 +307,87 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
         await pc.setLocalDescription(answer);
         socketRef.current?.emit('answer', { answer });
       } catch (e) {
-        console.error('Failed to set offer / create answer', e);
+        console.error('Failed to set offer/answer:', e);
       }
     });
 
-    socket.on('answer', async ({ answer }: { answer: RTCSessionDescriptionInit }) => {
+    sock.on('answer', async ({ answer }: { answer: RTCSessionDescriptionInit }) => {
       const pc = peerRef.current;
       if (!pc) return;
       try {
         await pc.setRemoteDescription(new RTCSessionDescription(answer));
       } catch (e) {
-        console.error('Failed to set remote description from answer', e);
+        console.error('Failed to set answer remote description:', e);
       }
     });
 
-    socket.on('ice_candidate', async ({ candidate }: { candidate: RTCIceCandidateInit }) => {
+    sock.on('ice_candidate', async ({ candidate }: { candidate: RTCIceCandidateInit }) => {
       const pc = peerRef.current;
       if (!pc) return;
       try {
         await pc.addIceCandidate(new RTCIceCandidate(candidate));
       } catch (e) {
-        console.error('Error adding ICE candidate', e);
+        console.error('Error adding ICE candidate:', e);
       }
     });
 
-    socket.on('chat_message', ({ text }: { text: string }) => {
-      appendMessage('stranger', text);
+    sock.on('chat_message', ({ text }: { text: string }) => {
+      appendMessageRef.current?.('stranger', text);
     });
 
-    socket.on('typing', () => {
-      setStrangerTyping(true);
-    });
+    sock.on('typing', () => setStrangerTyping(true));
+    sock.on('stop_typing', () => setStrangerTyping(false));
 
-    socket.on('stop_typing', () => {
-      setStrangerTyping(false);
-    });
-
-    socket.on('stranger_disconnected', () => {
-      cleanPeerConnection();
+    sock.on('stranger_disconnected', () => {
+      cleanPeerConnectionRef.current?.();
       setIsConnected(false);
-      appendSystemMessage('Stranger disconnected.');
+      appendMessageRef.current?.('system', 'Stranger disconnected.');
     });
 
-    socket.on('stopped', () => {
-      cleanPeerConnection();
+    sock.on('stopped', () => {
+      cleanPeerConnectionRef.current?.();
       setIsConnected(false);
       setIsMatching(false);
-      appendSystemMessage('Session stopped.');
+      appendMessageRef.current?.('system', 'Session stopped.');
     });
 
-    socket.on('private_invite_accepted', ({ roomId }) => {
-      appendSystemMessage('Invitation accepted! Directing to private room...');
+    sock.on('private_invite_accepted', ({ roomId }: { roomId: string }) => {
+      appendMessageRef.current?.('system', 'Invitation accepted! Directing to private room...');
       router.push(`/chat?room=${roomId}&mode=video`);
     });
 
-    socket.on('follow_request_incoming', ({ senderUsername }) => {
+    sock.on('follow_request_incoming', ({ senderUsername }: { senderUsername: string }) => {
       setIncomingFollowRequest(senderUsername);
     });
 
-    socket.on('follow_accepted_incoming', ({ accepterUsername }) => {
-      appendSystemMessage(`@${accepterUsername} accepted your follow request!`);
+    sock.on('follow_accepted_incoming', ({ accepterUsername }: { accepterUsername: string }) => {
+      appendMessageRef.current?.('system', `@${accepterUsername} accepted your follow request!`);
     });
 
-    socket.on('private_invite_incoming', ({ senderUsername, roomId }) => {
+    sock.on('private_invite_incoming', ({ senderUsername, roomId }: { senderUsername: string; roomId: string }) => {
       setIncomingInvite({ senderUsername, roomId });
     });
 
     return () => {
-      cleanPeerConnection();
-      socket.disconnect();
+      cleanPeerConnectionRef.current?.();
+      sock.disconnect();
     };
-  }, [serverUrl]);
+  }, [serverUrl, router]);
 
-  const cleanPeerConnection = () => {
-    if (peerRef.current) {
-      peerRef.current.close();
-      peerRef.current = null;
-    }
-    setRemoteStream(null);
-    setPartnerUsername(null);
-  };
-
+  // ─── Action handlers ─────────────────────────────────────────────────────
   const handleAcceptFollowIncoming = async () => {
     if (!incomingFollowRequest) return;
     const token = localStorage.getItem('ghostchat_token');
     if (!token) return;
-
     try {
       const res = await fetch(`${serverUrl}/api/follow/accept`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ targetUsername: incomingFollowRequest })
       });
       if (res.ok) {
         socketRef.current?.emit('follow_accept', { targetUsername: incomingFollowRequest });
-        appendSystemMessage(`You are now following @${incomingFollowRequest}!`);
+        appendMessage('system', `You are now following @${incomingFollowRequest}!`);
       }
     } catch (err) {
       console.error('Failed to accept follow request:', err);
@@ -402,7 +411,7 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
     setUsername(user.username);
     const stored = localStorage.getItem('ghostchat_user');
     if (stored) {
-      setCurrentUser(JSON.parse(stored));
+      try { setCurrentUser(JSON.parse(stored)); } catch (_) {}
     } else {
       setCurrentUser({ username: user.username });
     }
@@ -419,31 +428,10 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
   const handleBackToHome = () => {
     cleanPeerConnection();
     stopLocalTracks();
-    if (socketRef.current) {
-      socketRef.current.disconnect();
-    }
+    socketRef.current?.disconnect();
     router.push('/');
   };
 
-  // --- Message helpers ---
-  const appendMessage = (sender: 'self' | 'stranger' | 'system', text: string) => {
-    const formattedTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: Math.random().toString(36).substr(2),
-        sender,
-        text,
-        timestamp: formattedTime
-      }
-    ]);
-  };
-
-  const appendSystemMessage = (text: string) => {
-    appendMessage('system', text);
-  };
-
-  // --- UI Action Handlers ---
   const handleStartChat = () => {
     setMessages([]);
     setIsMatching(true);
@@ -473,28 +461,20 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
     setIsConnected(false);
     setIsMatching(true);
     setMessages([]);
-
-    if (isOfflineSim) {
-      simulateOfflineMatch();
-    } else {
-      socketRef.current?.emit('next_stranger');
-    }
+    if (isOfflineSim) simulateOfflineMatch();
+    else socketRef.current?.emit('next_stranger');
   };
 
   const handleStopChat = () => {
     cleanPeerConnection();
     setIsConnected(false);
     setIsMatching(false);
-    appendSystemMessage('You stopped the chat.');
-
-    if (!isOfflineSim) {
-      socketRef.current?.emit('stop');
-    }
+    appendMessage('system', 'You stopped the chat.');
+    if (!isOfflineSim) socketRef.current?.emit('stop');
   };
 
   const handleSendMessage = (text: string) => {
     appendMessage('self', text);
-
     if (isOfflineSim) {
       simulateOfflineReply(text);
     } else {
@@ -505,15 +485,9 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
 
   const handleTyping = () => {
     if (isOfflineSim) return;
-    if (!isTyping) {
-      setIsTyping(true);
-      socketRef.current?.emit('typing');
-    }
-
+    socketRef.current?.emit('typing');
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-
     typingTimeoutRef.current = setTimeout(() => {
-      setIsTyping(false);
       socketRef.current?.emit('stop_typing');
     }, 2000);
   };
@@ -538,427 +512,313 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
     }
   };
 
-  // --- Submission functions ---
   const handleReportAbuse = async (reason: string, details: string) => {
-    // Send telemetry to server
     try {
       await fetch(`${serverUrl}/api/reports`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          reported_username: 'Stranger',
-          reason,
-          details
-        })
+        body: JSON.stringify({ reported_username: 'Stranger', reason, details })
       });
-    } catch (err) {}
-
-    appendSystemMessage('You reported this user. Matching next peer...');
+    } catch { /* ignore */ }
+    appendMessage('system', 'You reported this user. Matching next peer...');
     handleNextStranger();
   };
 
-  // --- Offline Simulation Mode Triggers ---
+  // ─── Offline Simulation ──────────────────────────────────────────────────
   const simulateOfflineMatch = () => {
     const delay = 1500 + Math.random() * 2000;
     setTimeout(() => {
       setIsMatching(false);
       setIsConnected(true);
-      appendSystemMessage('[SIMULATED MATCH] Paired with a friendly stranger!');
-      
-      // Setup mock remote canvas stream
+      appendMessage('system', '[SIMULATED MATCH] Paired with a friendly stranger!');
+
       const remoteCanvas = document.createElement('canvas');
       remoteCanvas.width = 640;
       remoteCanvas.height = 480;
       const ctx = remoteCanvas.getContext('2d');
       let f = 0;
-      const t = setInterval(() => {
+      setInterval(() => {
         if (ctx) {
           ctx.fillStyle = '#1f1f1f';
           ctx.fillRect(0, 0, 640, 480);
           ctx.fillStyle = '#fff';
           ctx.font = '22px sans-serif';
           ctx.fillText(`Stranger Stream [Frame ${f++}]`, 40, 240);
-          ctx.fillRect(100 + Math.sin(f * 0.05) * 80, 300, 30, 30);
         }
       }, 100);
 
       try {
-        const stream = (remoteCanvas as any).captureStream(15);
-        setRemoteStream(stream);
-      } catch (e) {}
+        const canvasAny = remoteCanvas as HTMLCanvasElement & { captureStream(fps?: number): MediaStream };
+        setRemoteStream(canvasAny.captureStream(15));
+      } catch { /* ignore */ }
     }, delay);
   };
 
   const simulateOfflineReply = (userText: string) => {
-    // Simulate typing delay
+    console.debug('[Sim] User said:', userText);
     setTimeout(() => {
       setStrangerTyping(true);
       setTimeout(() => {
         setStrangerTyping(false);
         const replies = [
-          'Wow, that is fascinating! Tell me more.',
+          'Wow, tell me more!',
           'Haha nice. Where are you from?',
-          'Same here! I also like ' + (interests[0] || 'chatting with new people') + '.',
-          'Hello! Glad we matched here.',
-          'Yes, this minimalist design is awesome.'
+          `Same here! I also like ${interests[0] || 'chatting'}.`,
+          'Hello! Glad we matched.',
+          'This design is awesome.'
         ];
-        const randomReply = replies[Math.floor(Math.random() * replies.length)];
-        appendMessage('stranger', randomReply);
+        appendMessage('stranger', replies[Math.floor(Math.random() * replies.length)]);
       }, 1500 + Math.random() * 1500);
     }, 500);
   };
 
+  // ─── Render ──────────────────────────────────────────────────────────────
   return (
-    <div
-      ref={containerRef}
-      className="flex w-full flex-col overflow-hidden bg-brand-gray-light"
-    >
+    <div ref={containerRef} className="flex w-full flex-col overflow-hidden bg-brand-gray-light">
       <Navbar
         onlineCount={onlineCount}
         user={currentUser}
         onAuthClick={() => setAuthOpen(true)}
         onLogout={handleLogout}
         onAuthSuccess={handleAuthSuccess}
-        socket={socketRef.current}
+        socket={socket}
       />
 
-      <div
-        className={`flex-grow min-h-0 mx-auto w-full max-w-7xl ${
-          chatMode === 'video' ? 'p-0 lg:p-6' : 'p-3 md:p-6'
-        }`}
-      >
-        <div
-          className={`flex h-full w-full ${
-            chatMode === 'video'
-              ? 'flex-col lg:flex-row gap-0 lg:gap-6 relative'
-              : 'flex-col lg:flex-row gap-4'
-          }`}
-        >
-        
-        {/* LEFT COLUMN: Controls + Video Area */}
-        <div
-          className={`flex flex-col ${
-            chatMode === 'video'
-              ? 'relative w-full lg:w-[calc(70%-12px)] h-full lg:h-full overflow-hidden'
-              : 'flex-1 gap-4'
-          }`}
-        >
-          
-          {/* Filters overlay: only show in text mode before match */}
-          {chatMode === 'text' && !isConnected && !isMatching && (
-            <div>
-              <MatchingFilters
-                interests={interests}
-                setInterests={setInterests}
-                language={language}
-                setLanguage={setLanguage}
-                country={country}
-                setCountry={setCountry}
+      <div className={`flex-grow min-h-0 mx-auto w-full max-w-7xl ${chatMode === 'video' ? 'p-0 lg:p-6' : 'p-3 md:p-6'}`}>
+        <div className={`flex h-full w-full ${chatMode === 'video' ? 'flex-col lg:flex-row gap-0 lg:gap-6 relative' : 'flex-col lg:flex-row gap-4'}`}>
+
+          {/* LEFT COLUMN: Controls + Video Area */}
+          <div className={`flex flex-col ${chatMode === 'video' ? 'relative w-full lg:w-[calc(70%-12px)] h-full lg:h-full overflow-hidden' : 'flex-1 gap-4'}`}>
+
+            {/* Filters: text mode only, before match */}
+            {chatMode === 'text' && !isConnected && !isMatching && (
+              <div>
+                <MatchingFilters
+                  interests={interests} setInterests={setInterests}
+                  language={language} setLanguage={setLanguage}
+                  country={country} setCountry={setCountry}
+                />
+              </div>
+            )}
+
+            {/* Main Video/Text tile */}
+            <div className={chatMode === 'video' ? 'absolute inset-0 lg:relative lg:flex-1 w-full h-full lg:h-auto min-h-0' : 'flex-1 min-h-[300px]'}>
+              <VideoTile
+                localStream={localStream}
+                remoteStream={remoteStream}
+                isCamOn={isCamOn}
+                isMicOn={isMicOn}
+                isConnected={isConnected}
+                isMatching={isMatching}
+                onReportClick={() => setReportOpen(true)}
+                onAuthClick={() => setAuthOpen(true)}
+                chatMode={chatMode}
+                partnerUsername={partnerUsername}
+                serverUrl={serverUrl}
+                socket={socket}
+                currentUser={currentUser}
               />
             </div>
-          )}
 
-          {/* Main Video tile */}
-          <div className={chatMode === 'video' ? 'absolute inset-0 lg:relative lg:flex-1 w-full h-full lg:h-auto min-h-0' : 'flex-1 min-h-[300px]'}>
-            <VideoTile
-              localStream={localStream}
-              remoteStream={remoteStream}
-              isCamOn={isCamOn}
-              isMicOn={isMicOn}
-              isConnected={isConnected}
-              isMatching={isMatching}
-              onReportClick={() => setReportOpen(true)}
-              onAuthClick={() => setAuthOpen(true)}
-              chatMode={chatMode}
-              partnerUsername={partnerUsername}
-              serverUrl={serverUrl}
-              socket={socketRef.current}
-              currentUser={currentUser}
-            />
-          </div>
-
-          {/* Controls Bar */}
-          <div
-            className={`transition-all duration-300 ${
+            {/* Controls Bar */}
+            <div className={`transition-all duration-300 ${
               chatMode === 'video'
                 ? 'absolute bottom-6 left-1/2 -translate-x-1/2 z-30 w-[90%] sm:w-auto flex flex-wrap items-center justify-center gap-3 rounded-2xl border border-white/10 bg-black/60 backdrop-blur-md p-3.5 shadow-xl text-white'
                 : 'flex flex-wrap items-center justify-center gap-3 rounded-2xl border border-brand-gray-mid/60 bg-white p-3.5 shadow-xs text-brand-black'
-            }`}
-          >
-            {/* Start / Stop matching */}
-            {!isConnected && !isMatching ? (
-              <div className="flex flex-wrap items-center gap-2 justify-center">
-                {/* Video mode: filters toggle button */}
-                {chatMode === 'video' && (
+            }`}>
+              {!isConnected && !isMatching ? (
+                <div className="flex flex-wrap items-center gap-2 justify-center">
                   <button
-                    onClick={() => setShowVideoFilters(v => !v)}
-                    className={`flex items-center gap-1.5 rounded-xl border px-4 py-3 text-xs font-bold uppercase tracking-wider transition-all active:scale-95 cursor-pointer ${
-                      showVideoFilters
-                        ? 'border-white/40 bg-white/20 text-white'
-                        : 'border-white/20 bg-white/10 text-white/70 hover:bg-white/20 hover:text-white'
+                    onClick={handleStartChat}
+                    className={`flex items-center gap-1.5 rounded-xl px-6 py-3 text-xs font-bold uppercase tracking-wider transition-all active:scale-95 shadow-sm cursor-pointer ${
+                      chatMode === 'video' ? 'bg-white text-brand-black hover:bg-white/95' : 'bg-brand-black text-white hover:bg-brand-black/95'
                     }`}
-                    title="Matchmaking Filters"
                   >
-                    <SlidersHorizontal size={14} />
-                    Filters
+                    <Video size={16} /> Start Chatting
                   </button>
-                )}
-                <button
-                  onClick={handleStartChat}
-                  className={`flex items-center gap-1.5 rounded-xl px-6 py-3 text-xs font-bold uppercase tracking-wider transition-all active:scale-95 shadow-sm cursor-pointer ${
-                    chatMode === 'video'
-                      ? 'bg-white text-brand-black hover:bg-white/95'
-                      : 'bg-brand-black text-white hover:bg-brand-black/95'
-                  }`}
-                >
-                  <Video size={16} />
-                  Start Chatting
-                </button>
-                <button
-                  onClick={handleBackToHome}
-                  className={`flex items-center gap-1.5 rounded-xl border px-5 py-3 text-xs font-bold uppercase tracking-wider transition-all active:scale-95 cursor-pointer ${
-                    chatMode === 'video'
-                      ? 'border-white/20 bg-white/10 text-white hover:bg-white/20'
-                      : 'border-brand-gray-mid/85 bg-white text-brand-black hover:bg-brand-gray-light'
-                  }`}
-                >
-                  Back to Home
-                </button>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={handleNextStranger}
-                  className={`flex items-center gap-1.5 rounded-xl px-5 py-3 text-xs font-bold uppercase tracking-wider transition-all active:scale-95 cursor-pointer ${
-                    chatMode === 'video'
-                      ? 'bg-white text-brand-black hover:bg-white/95'
-                      : 'bg-brand-black text-white hover:bg-brand-black/95'
-                  }`}
-                >
-                  <RefreshCw size={14} className="animate-spin-slow" />
-                  Next Stranger
-                </button>
-                <button
-                  onClick={handleStopChat}
-                  className={`flex items-center gap-1.5 rounded-xl border px-5 py-3 text-xs font-bold uppercase tracking-wider transition-all active:scale-95 cursor-pointer ${
-                    chatMode === 'video'
-                      ? 'border-white/20 bg-white/10 text-white hover:bg-white/20'
-                      : 'border-brand-gray-mid/85 bg-white text-brand-black hover:bg-brand-gray-light'
-                  }`}
-                >
-                  <Square size={13} />
-                  Stop
-                </button>
-                <button
-                  onClick={handleBackToHome}
-                  className={`flex items-center gap-1.5 rounded-xl border px-5 py-3 text-xs font-bold uppercase tracking-wider transition-all active:scale-95 cursor-pointer ${
-                    chatMode === 'video'
-                      ? 'border-white/20 bg-white/10 text-white hover:bg-white/20'
-                      : 'border-brand-gray-mid/85 bg-white text-brand-black hover:bg-brand-gray-light'
-                  }`}
-                >
-                  Back to Home
-                </button>
-              </div>
-            )}
+                  <button
+                    onClick={handleBackToHome}
+                    className={`flex items-center gap-1.5 rounded-xl border px-5 py-3 text-xs font-bold uppercase tracking-wider transition-all active:scale-95 cursor-pointer ${
+                      chatMode === 'video' ? 'border-white/20 bg-white/10 text-white hover:bg-white/20' : 'border-brand-gray-mid/85 bg-white text-brand-black hover:bg-brand-gray-light'
+                    }`}
+                  >
+                    Back to Home
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleNextStranger}
+                    className={`flex items-center gap-1.5 rounded-xl px-5 py-3 text-xs font-bold uppercase tracking-wider transition-all active:scale-95 cursor-pointer ${
+                      chatMode === 'video' ? 'bg-white text-brand-black hover:bg-white/95' : 'bg-brand-black text-white hover:bg-brand-black/95'
+                    }`}
+                  >
+                    <RefreshCw size={14} /> Next Stranger
+                  </button>
+                  <button
+                    onClick={handleStopChat}
+                    className={`flex items-center gap-1.5 rounded-xl border px-5 py-3 text-xs font-bold uppercase tracking-wider transition-all active:scale-95 cursor-pointer ${
+                      chatMode === 'video' ? 'border-white/20 bg-white/10 text-white hover:bg-white/20' : 'border-brand-gray-mid/85 bg-white text-brand-black hover:bg-brand-gray-light'
+                    }`}
+                  >
+                    <Square size={13} /> Stop
+                  </button>
+                  <button
+                    onClick={handleBackToHome}
+                    className={`flex items-center gap-1.5 rounded-xl border px-5 py-3 text-xs font-bold uppercase tracking-wider transition-all active:scale-95 cursor-pointer ${
+                      chatMode === 'video' ? 'border-white/20 bg-white/10 text-white hover:bg-white/20' : 'border-brand-gray-mid/85 bg-white text-brand-black hover:bg-brand-gray-light'
+                    }`}
+                  >
+                    Back to Home
+                  </button>
+                </div>
+              )}
 
-            {/* Media Toggles (Video only) */}
-            {chatMode === 'video' && (
-              <div className="flex items-center gap-2 border-l border-white/20 pl-3">
-                <button
-                  onClick={handleToggleCam}
-                  className={`flex h-11 w-11 items-center justify-center rounded-xl transition-all active:scale-90 cursor-pointer ${
-                    isCamOn
-                      ? 'bg-white/10 border border-white/20 text-white hover:bg-white/20'
-                      : 'bg-red-600 text-white shadow-xs'
-                  }`}
-                  title={isCamOn ? 'Turn Camera Off' : 'Turn Camera On'}
-                >
-                  {isCamOn ? <Video size={17} /> : <VideoOff size={17} />}
-                </button>
-                <button
-                  onClick={handleToggleMic}
-                  className={`flex h-11 w-11 items-center justify-center rounded-xl transition-all active:scale-90 cursor-pointer ${
-                    isMicOn
-                      ? 'bg-white/10 border border-white/20 text-white hover:bg-white/20'
-                      : 'bg-red-600 text-white shadow-xs'
-                  }`}
-                  title={isMicOn ? 'Mute Microphone' : 'Unmute Microphone'}
-                >
-                  {isMicOn ? <Volume2 size={17} /> : <MicOff size={17} />}
-                </button>
-              </div>
-            )}
+              {/* Media Toggles — video mode only */}
+              {chatMode === 'video' && (
+                <div className="flex items-center gap-2 border-l border-white/20 pl-3">
+                  <button
+                    onClick={handleToggleCam}
+                    className={`flex h-11 w-11 items-center justify-center rounded-xl transition-all active:scale-90 cursor-pointer ${
+                      isCamOn ? 'bg-white/10 border border-white/20 text-white hover:bg-white/20' : 'bg-red-600 text-white shadow-xs'
+                    }`}
+                    title={isCamOn ? 'Turn Camera Off' : 'Turn Camera On'}
+                  >
+                    {isCamOn ? <Video size={17} /> : <VideoOff size={17} />}
+                  </button>
+                  <button
+                    onClick={handleToggleMic}
+                    className={`flex h-11 w-11 items-center justify-center rounded-xl transition-all active:scale-90 cursor-pointer ${
+                      isMicOn ? 'bg-white/10 border border-white/20 text-white hover:bg-white/20' : 'bg-red-600 text-white shadow-xs'
+                    }`}
+                    title={isMicOn ? 'Mute Microphone' : 'Unmute Microphone'}
+                  >
+                    {isMicOn ? <Volume2 size={17} /> : <MicOff size={17} />}
+                  </button>
+                </div>
+              )}
 
-            {/* Mobile Chat Button Toggle */}
-            {chatMode === 'video' && (
-              <button
-                type="button"
-                onClick={() => setShowMobileChat(!showMobileChat)}
-                className={`lg:hidden flex h-11 w-11 items-center justify-center rounded-xl transition-all active:scale-90 cursor-pointer relative ${
-                  showMobileChat
-                    ? 'bg-white text-brand-black shadow-xs'
-                    : 'bg-white/10 border border-white/20 text-white hover:bg-white/20'
-                }`}
-                title="Toggle Chat"
-              >
-                <MessageSquare size={17} />
-                {messages.length > 0 && messages[messages.length - 1].sender === 'stranger' && !showMobileChat && (
-                  <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-red-500 animate-pulse" />
-                )}
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* VIDEO MODE: Collapsible filter panel, shown above controls bar */}
-        {chatMode === 'video' && showVideoFilters && !isConnected && !isMatching && (
-          <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-40 w-[90%] max-w-md animate-in fade-in slide-in-from-bottom-3 duration-200">
-            <div className="rounded-2xl border border-white/10 bg-black/75 backdrop-blur-md p-4 shadow-2xl">
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-[10px] font-bold uppercase tracking-widest text-white/60">Matchmaking Filters</span>
-                <button onClick={() => setShowVideoFilters(false)} className="text-white/40 hover:text-white transition-colors text-xs">✕</button>
-              </div>
-              <MatchingFilters
-                interests={interests}
-                setInterests={setInterests}
-                language={language}
-                setLanguage={setLanguage}
-                country={country}
-                setCountry={setCountry}
-              />
+              {/* Mobile Chat Toggle — video mode only */}
+              {chatMode === 'video' && (
+                <button
+                  type="button"
+                  onClick={() => setShowMobileChat(!showMobileChat)}
+                  className={`lg:hidden flex h-11 w-11 items-center justify-center rounded-xl transition-all active:scale-90 cursor-pointer relative ${
+                    showMobileChat ? 'bg-white text-brand-black shadow-xs' : 'bg-white/10 border border-white/20 text-white hover:bg-white/20'
+                  }`}
+                  title="Toggle Chat"
+                >
+                  <MessageSquare size={17} />
+                  {messages.length > 0 && messages[messages.length - 1].sender === 'stranger' && !showMobileChat && (
+                    <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-red-500 animate-pulse" />
+                  )}
+                </button>
+              )}
             </div>
           </div>
-        )}
-        <div
-          className={`${
+
+          {/* RIGHT COLUMN: Chat Panel */}
+          <div className={`${
             chatMode === 'video'
-              ? `absolute lg:relative inset-y-0 right-0 z-40 w-full sm:w-[350px] lg:w-[calc(30%-12px)] h-full lg:h-auto shrink-0 transition-transform duration-300 transform ${
-                  showMobileChat ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'
-                }`
+              ? `absolute lg:relative inset-y-0 right-0 z-40 w-full sm:w-[350px] lg:w-[calc(30%-12px)] h-full lg:h-auto shrink-0 transition-transform duration-300 transform ${showMobileChat ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'}`
               : 'w-full lg:w-[380px] h-[350px] lg:h-auto shrink-0'
-          }`}
-        >
-          {/* Mobile Chat Close Header */}
-          {chatMode === 'video' && showMobileChat && (
-            <div className="flex lg:hidden items-center justify-between bg-white border-b border-brand-gray-mid/40 p-4">
-              <span className="font-bold text-sm text-brand-black">Stranger Chat</span>
-              <button
-                type="button"
-                onClick={() => setShowMobileChat(false)}
-                className="text-brand-black/55 hover:text-brand-black font-bold uppercase tracking-wider text-2xs border border-brand-gray-mid/60 rounded-lg px-2.5 py-1.5 cursor-pointer"
-              >
-                Close
-              </button>
-            </div>
-          )}
-          <ChatPanel
-            messages={messages}
-            onSendMessage={handleSendMessage}
-            isTyping={strangerTyping}
-            onTyping={handleTyping}
-            isConnected={isConnected}
-          />
-        </div>
+          }`}>
+            {/* Mobile Chat Close Header */}
+            {chatMode === 'video' && showMobileChat && (
+              <div className="flex lg:hidden items-center justify-between bg-white border-b border-brand-gray-mid/40 p-4">
+                <span className="font-bold text-sm text-brand-black">Stranger Chat</span>
+                <button type="button" onClick={() => setShowMobileChat(false)}
+                  className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-brand-gray-light text-brand-black/60 cursor-pointer">
+                  ✕
+                </button>
+              </div>
+            )}
 
-        {/* Peer Profile slide-in panel */}
-        {isConnected && partnerUsername && (
-          <div
-            className={`${
+            <ChatPanel
+              messages={messages}
+              onSendMessage={handleSendMessage}
+              onTyping={handleTyping}
+              isConnected={isConnected}
+              strangerTyping={strangerTyping}
+            />
+          </div>
+
+          {/* Peer Profile slide-in panel */}
+          {isConnected && partnerUsername && (
+            <div className={`${
               chatMode === 'video'
                 ? 'absolute lg:relative top-16 left-4 lg:top-auto lg:left-auto z-35 max-w-[280px] lg:max-w-none w-auto lg:w-72 h-auto lg:h-auto shrink-0 animate-in slide-in-from-right duration-200'
                 : 'w-full lg:w-72 h-[350px] lg:h-auto shrink-0 animate-in slide-in-from-right duration-200'
-            }`}
-          >
-            <PeerProfileCard
-              partnerUsername={partnerUsername}
-              serverUrl={serverUrl}
-              socket={socketRef.current}
-            />
-          </div>
-        )}
+            }`}>
+              <PeerProfileCard
+                partnerUsername={partnerUsername}
+                serverUrl={serverUrl}
+                socket={socket}
+              />
+            </div>
+          )}
+        </div>
       </div>
-    </div>
 
-      {/* Report Abuse Overlay */}
-      <ReportModal
-        isOpen={reportOpen}
-        onClose={() => setReportOpen(false)}
-        onSubmit={handleReportAbuse}
-      />
+      {/* Overlays */}
+      <ReportModal isOpen={reportOpen} onClose={() => setReportOpen(false)} onSubmit={handleReportAbuse} />
+      <TermsModal isOpen={showTerms} onAccept={() => setShowTerms(false)} />
 
-      {/* Terms Accept Overlay */}
-      <TermsModal
-        isOpen={showTerms}
-        onAccept={() => setShowTerms(false)}
-      />
-
-      {/* Mid-call incoming follow request overlay */}
+      {/* Incoming follow request dialog */}
       {incomingFollowRequest && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-xs p-4">
           <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl border border-brand-gray-mid/30 text-center space-y-4 animate-in zoom-in-95 duration-200">
             <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-blue-50 border border-blue-100 text-blue-600 animate-bounce">
               <UserCheck size={24} />
             </div>
-            
             <div className="space-y-1.5">
               <h4 className="font-extrabold text-brand-black text-lg">Follow Request</h4>
               <p className="text-xs text-brand-black/60 leading-relaxed">
-                <strong className="font-extrabold text-brand-black">@{incomingFollowRequest}</strong> wants to follow you. Accepting will update follower metrics instantly.
+                <strong className="font-extrabold text-brand-black">@{incomingFollowRequest}</strong> sent you a follow request.
               </p>
             </div>
-
             <div className="flex gap-3 pt-2">
-              <button
-                onClick={handleAcceptFollowIncoming}
-                className="flex-1 rounded-xl bg-brand-black py-2.5 text-xs font-bold uppercase tracking-wider text-white transition-all hover:bg-brand-black/90 active:scale-95 cursor-pointer"
-              >
+              <button onClick={handleAcceptFollowIncoming}
+                className="flex-1 rounded-xl bg-brand-black py-2.5 text-xs font-bold uppercase tracking-wider text-white transition-all hover:bg-brand-black/90 active:scale-95 cursor-pointer">
                 Accept
               </button>
-              <button
-                onClick={() => setIncomingFollowRequest(null)}
-                className="rounded-xl border border-brand-gray-mid/60 px-5 py-2.5 text-xs font-bold uppercase tracking-wider text-brand-black hover:bg-brand-gray-light cursor-pointer"
-              >
-                Decline
+              <button onClick={() => setIncomingFollowRequest(null)}
+                className="rounded-xl border border-brand-gray-mid/60 px-5 py-2.5 text-xs font-bold uppercase tracking-wider text-brand-black hover:bg-brand-gray-light cursor-pointer">
+                Cancel
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Mid-call incoming call invite overlay */}
+      {/* Incoming call invite dialog */}
       {incomingInvite && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-xs p-4">
           <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl border border-brand-gray-mid/30 text-center space-y-4 animate-in zoom-in-95 duration-200">
             <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-50 border border-emerald-100 text-emerald-600 animate-pulse">
               <PhoneCall size={24} />
             </div>
-            
             <div className="space-y-1.5">
               <h4 className="font-extrabold text-brand-black text-lg">Incoming Call</h4>
               <p className="text-xs text-brand-black/60 leading-relaxed">
-                <strong className="font-extrabold text-brand-black">@{incomingInvite.senderUsername}</strong> is inviting you to a private chat session right now.
+                <strong className="font-extrabold text-brand-black">@{incomingInvite.senderUsername}</strong> is inviting you to a private chat session.
               </p>
             </div>
-
             <div className="flex gap-3 pt-2">
-              <button
-                onClick={handleAcceptInviteIncoming}
-                className="flex-grow rounded-xl bg-emerald-600 py-2.5 text-xs font-bold uppercase tracking-wider text-white transition-all hover:bg-emerald-700 active:scale-95 cursor-pointer"
-              >
+              <button onClick={handleAcceptInviteIncoming}
+                className="flex-grow rounded-xl bg-emerald-600 py-2.5 text-xs font-bold uppercase tracking-wider text-white transition-all hover:bg-emerald-700 active:scale-95 cursor-pointer">
                 Accept and Join
               </button>
-              <button
-                onClick={() => setIncomingInvite(null)}
-                className="rounded-xl border border-brand-gray-mid/60 px-5 py-2.5 text-xs font-bold uppercase tracking-wider text-brand-black hover:bg-brand-gray-light cursor-pointer"
-              >
+              <button onClick={() => setIncomingInvite(null)}
+                className="rounded-xl border border-brand-gray-mid/60 px-5 py-2.5 text-xs font-bold uppercase tracking-wider text-brand-black hover:bg-brand-gray-light cursor-pointer">
                 Ignore
               </button>
             </div>
           </div>
         </div>
       )}
-      {/* Registration/Login Overlay */}
+
+      {/* Auth Modal */}
       <AuthModal
         isOpen={authOpen}
         onClose={() => setAuthOpen(false)}
