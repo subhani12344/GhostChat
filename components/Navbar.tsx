@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import Logo from './Logo';
 import { User, Users } from 'lucide-react';
 import AnonymousModal from './AnonymousModal';
@@ -26,6 +27,7 @@ export default function Navbar({
   onAuthSuccess,
   socket = null
 }: NavbarProps) {
+  const router = useRouter();
   const [anonOpen, setAnonOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const serverUrl = process.env.NEXT_PUBLIC_SERVER_URL || (typeof window !== "undefined" && !window.location.hostname.includes("localhost") && !window.location.hostname.includes("127.0.0.1") ? "https://ghostchat-backend.onrender.com" : "http://localhost:4000");
@@ -63,7 +65,7 @@ export default function Navbar({
                   serverUrl={serverUrl}
                   socket={socket || null}
                   currentUser={user}
-                  onAuthTrigger={onAuthClick}
+                  onAuthTrigger={() => router.push('/login')}
                 />
 
                 {/* Clickable Username Profile trigger */}
@@ -87,13 +89,13 @@ export default function Navbar({
                 </button>
               </div>
             ) : (
-              <button
-                onClick={onAuthClick}
-                className="flex items-center gap-1.5 rounded-full bg-brand-black px-3 sm:px-4 py-1.5 text-xs font-bold uppercase tracking-wider text-white transition-all hover:bg-brand-black/90 active:scale-95 cursor-pointer font-bold"
+              <Link
+                href="/login"
+                className="flex items-center gap-1.5 rounded-full bg-brand-black px-3 sm:px-4 py-1.5 text-xs font-bold uppercase tracking-wider text-white transition-all hover:bg-brand-black/90 active:scale-95 cursor-pointer font-bold animate-in fade-in"
               >
                 <User size={13} />
                 Login / Sign Up
-              </button>
+              </Link>
             )}
           </div>
         </div>
@@ -118,7 +120,7 @@ export default function Navbar({
         socket={socket || null}
         onLogout={onLogout}
         onProfileUpdate={onAuthSuccess}
-        onAuthTrigger={onAuthClick}
+        onAuthTrigger={() => router.push('/login')}
       />
     </>
   );

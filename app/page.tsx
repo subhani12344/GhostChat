@@ -5,7 +5,6 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
-import AuthModal from '@/components/AuthModal';
 import TermsModal from '@/components/TermsModal';
 import CookieBanner from '@/components/CookieBanner';
 import { Shield, Sparkles, MessageSquare, Globe, Smartphone, Zap } from 'lucide-react';
@@ -54,8 +53,7 @@ export default function Home() {
     if (user) {
       router.push(targetPath);
     } else {
-      setPendingRedirect(targetPath);
-      setAuthOpen(true);
+      router.push(`/login?redirect=${encodeURIComponent(targetPath)}`);
     }
   };
 
@@ -200,19 +198,6 @@ export default function Home() {
       <Footer />
 
       <CookieBanner />
-
-      <AuthModal
-        isOpen={authOpen}
-        onClose={() => setAuthOpen(false)}
-        onAuthSuccess={(u) => {
-          setUser(u);
-          if (pendingRedirect) {
-            router.push(pendingRedirect);
-            setPendingRedirect(null);
-          }
-        }}
-        serverUrl={serverUrl}
-      />
 
       <TermsModal
         isOpen={showTerms}

@@ -413,6 +413,179 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
+// Request Password Reset OTP
+app.post('/api/auth/forgot-password', async (req, res) => {
+  const { email } = req.body;
+  if (!email) {
+    return res.status(400).json({ message: 'Email address is required' });
+  }
+
+  try {
+    const user = await db.getUserByEmail(email);
+    if (!user) {
+      return res.status(400).json({ message: 'Email address not registered to any account.' });
+    }
+
+    // Check lockout on password resets
+    const existingReset = await db.getPasswordReset(email);
+    if (existingReset && existingReset.locked_until) {
+      const lockDate = new Date(existingReset.locked_until);
+      if (lockDate > new Date()) {
+        const remainingHours = Math.ceil((lockDate - new Date()) / (1000 * 60 * 60));
+        return res.status(403).json({
+          message: `Too many failed attempts. Password recovery is locked. Try again after ${remainingHours} hours.`
+        });
+      }
+    }
+
+    // Generate random 6-digit OTP code
+    const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 2 * 60 * 1000); // 2 minutes expiry
+
+    // Save reset state in database
+    await db.createPasswordReset(email, otpCode, expiresAt);
+
+    // Dispatch OTP
+    await sendOtpEmail(email, otpCode);
+
+    res.json({ message: 'Verification code sent to email' });
+  } catch (err) {
+    console.error('Forgot password error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// Verify Password Reset OTP
+app.post('/api/auth/verify-reset-otp', async (req, res) => {
+  const { email, otp } = req.body;
+  if (!email || !otp) {
+    return res.status(400).json({ message: 'Email and OTP are required' });
+  }
+
+  try {
+    const record = await db.getPasswordReset(email);
+    if (!record) {
+      return res.status(400).json({ message: 'Verification record not found. Please try again.' });
+    }
+
+    // Check Lockout
+    if (record.locked_until && new Date(record.locked_until) > new Date()) {
+      return res.status(403).json({ message: 'Password recovery is locked. Try again later.' });
+    }
+
+    // Check Expiry
+    if (new Date(record.expires_at) < new Date()) {
+      return res.status(400).json({ message: 'Verification code has expired. Request a new code.' });
+    }
+
+    // Check Code
+    if (record.otp_code !== otp.trim()) {
+      return res.status(400).json({ message: 'Invalid verification code.' });
+    }
+
+    // OTP verified successfully. Issue a temporary 15-minute reset token.
+    const resetToken = jwt.sign(
+      { email: record.email, purpose: 'password_reset' },
+      JWT_SECRET,
+      { expiresIn: '15m' }
+    );
+
+    res.json({ message: 'OTP verified successfully', resetToken });
+  } catch (err) {
+    console.error('Verify reset OTP error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// Resend Password Reset OTP
+app.post('/api/auth/resend-reset-otp', async (req, res) => {
+  const { email } = req.body;
+  if (!email) {
+    return res.status(400).json({ message: 'Email is required' });
+  }
+
+  try {
+    const record = await db.getPasswordReset(email);
+    if (!record) {
+      return res.status(400).json({ message: 'No active recovery session found. Submit your email again.' });
+    }
+
+    // Check Lockout
+    if (record.locked_until && new Date(record.locked_until) > new Date()) {
+      return res.status(403).json({ message: 'Password recovery is locked.' });
+    }
+
+    // Check resend limit (max 3 resends)
+    if (record.resend_count >= 3) {
+      const lockedUntil = new Date(Date.now() + 18 * 60 * 60 * 1000); // 18 hrs lockout
+      await db.updatePasswordReset(email, record.otp_code, new Date(record.expires_at), record.resend_count, lockedUntil);
+      return res.status(403).json({
+        message: 'Resend limit reached (3 times). Password recovery is locked. Try again in 18 hours.'
+      });
+    }
+
+    // Generate new OTP
+    const newOtp = Math.floor(100000 + Math.random() * 900000).toString();
+    const newExpiry = new Date(Date.now() + 2 * 60 * 1000); // 2 minutes
+    const newCount = record.resend_count + 1;
+
+    // Save
+    await db.updatePasswordReset(email, newOtp, newExpiry, newCount, null);
+
+    // Dispatch
+    await sendOtpEmail(email, newOtp);
+
+    res.json({ message: 'Verification code resent successfully', resend_count: newCount });
+  } catch (err) {
+    console.error('Resend reset OTP error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// Reset User Password
+app.post('/api/auth/reset-password', async (req, res) => {
+  const { resetToken, password } = req.body;
+  if (!resetToken || !password) {
+    return res.status(400).json({ message: 'Reset token and new password are required' });
+  }
+
+  try {
+    // Verify JWT
+    let decoded;
+    try {
+      decoded = jwt.verify(resetToken, JWT_SECRET);
+    } catch (e) {
+      return res.status(400).json({ message: 'Invalid or expired password reset session. Start over.' });
+    }
+
+    if (decoded.purpose !== 'password_reset') {
+      return res.status(400).json({ message: 'Invalid authorization token' });
+    }
+
+    const email = decoded.email;
+
+    // Password strength check
+    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]).{8,}$/;
+    if (!passwordRegex.test(password)) {
+      return res.status(400).json({
+        message: 'Password must be at least 8 characters, contain at least one capital letter, one lowercase letter, one number, and one symbol.'
+      });
+    }
+
+    // Hash & update
+    const hashedPassword = await bcrypt.hash(password, 10);
+    await db.updateUserPassword(email, hashedPassword);
+
+    // Clear reset OTP record
+    await db.deletePasswordReset(email);
+
+    res.json({ message: 'Password reset successfully' });
+  } catch (err) {
+    console.error('Password reset endpoint error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
 // Anonymous Guest Login
 app.post('/api/auth/anonymous', (req, res) => {
   try {

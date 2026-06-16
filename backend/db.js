@@ -22,7 +22,8 @@ const initialJsonDb = {
   audit_logs: [],
   contact_inquiries: [],
   contact_replies: [],
-  deletion_requests: []
+  deletion_requests: [],
+  password_resets: []
 };
 
 // Load JSON DB
@@ -46,6 +47,7 @@ function readJsonDb() {
     if (!parsed.contact_inquiries) parsed.contact_inquiries = [];
     if (!parsed.contact_replies) parsed.contact_replies = [];
     if (!parsed.deletion_requests) parsed.deletion_requests = [];
+    if (!parsed.password_resets) parsed.password_resets = [];
     return parsed;
   } catch (err) {
     console.error('Error reading local JSON database:', err);
@@ -379,6 +381,18 @@ async function initDb() {
           requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           resolved_at TIMESTAMP,
           resolved_by INTEGER
+        );
+      `);
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS password_resets (
+          id SERIAL PRIMARY KEY,
+          email VARCHAR(100) UNIQUE NOT NULL,
+          otp_code VARCHAR(6) NOT NULL,
+          expires_at TIMESTAMP NOT NULL,
+          resend_count INTEGER DEFAULT 0,
+          locked_until TIMESTAMP,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
       `);
 
@@ -747,6 +761,93 @@ const db = {
       data.feedbacks.push(newFeedback);
       writeJsonDb(data);
       return newFeedback;
+    }
+  },
+
+  // --- PASSWORD RESETS & RECOVERY ---
+  async getPasswordReset(email) {
+    if (usePostgres) {
+      const res = await pool.query('SELECT * FROM password_resets WHERE LOWER(email) = LOWER($1)', [email]);
+      return res.rows[0];
+    } else {
+      const data = readJsonDb();
+      return data.password_resets.find(p => p.email.toLowerCase() === email.toLowerCase());
+    }
+  },
+
+  async createPasswordReset(email, otpCode, expiresAt) {
+    if (usePostgres) {
+      const res = await pool.query(`
+        INSERT INTO password_resets (email, otp_code, expires_at, resend_count, locked_until)
+        VALUES ($1, $2, $3, 0, NULL)
+        ON CONFLICT (email)
+        DO UPDATE SET otp_code = $2, expires_at = $3, resend_count = 0, locked_until = NULL
+        RETURNING *
+      `, [email, otpCode, expiresAt]);
+      return res.rows[0];
+    } else {
+      const data = readJsonDb();
+      data.password_resets = data.password_resets.filter(p => p.email.toLowerCase() !== email.toLowerCase());
+      const newReset = {
+        id: data.password_resets.length + 1,
+        email,
+        otp_code: otpCode,
+        expires_at: expiresAt.toISOString(),
+        resend_count: 0,
+        locked_until: null,
+        created_at: new Date().toISOString()
+      };
+      data.password_resets.push(newReset);
+      writeJsonDb(data);
+      return newReset;
+    }
+  },
+
+  async updatePasswordReset(email, otpCode, expiresAt, resendCount, lockedUntil) {
+    const lockedUntilStr = lockedUntil ? lockedUntil.toISOString() : null;
+    if (usePostgres) {
+      const res = await pool.query(`
+        UPDATE password_resets
+        SET otp_code = $2, expires_at = $3, resend_count = $4, locked_until = $5
+        WHERE LOWER(email) = LOWER($1)
+        RETURNING *
+      `, [email, otpCode, expiresAt, resendCount, lockedUntil]);
+      return res.rows[0];
+    } else {
+      const data = readJsonDb();
+      const idx = data.password_resets.findIndex(p => p.email.toLowerCase() === email.toLowerCase());
+      if (idx !== -1) {
+        data.password_resets[idx].otp_code = otpCode;
+        data.password_resets[idx].expires_at = expiresAt.toISOString();
+        data.password_resets[idx].resend_count = resendCount;
+        data.password_resets[idx].locked_until = lockedUntilStr;
+        writeJsonDb(data);
+        return data.password_resets[idx];
+      }
+      return null;
+    }
+  },
+
+  async deletePasswordReset(email) {
+    if (usePostgres) {
+      await pool.query('DELETE FROM password_resets WHERE LOWER(email) = LOWER($1)', [email]);
+    } else {
+      const data = readJsonDb();
+      data.password_resets = data.password_resets.filter(p => p.email.toLowerCase() !== email.toLowerCase());
+      writeJsonDb(data);
+    }
+  },
+
+  async updateUserPassword(email, newHashedPassword) {
+    if (usePostgres) {
+      await pool.query('UPDATE users SET password = $2 WHERE LOWER(email) = LOWER($1)', [email, newHashedPassword]);
+    } else {
+      const data = readJsonDb();
+      const idx = data.users.findIndex(u => u.email.toLowerCase() === email.toLowerCase());
+      if (idx !== -1) {
+        data.users[idx].password = newHashedPassword;
+        writeJsonDb(data);
+      }
     }
   },
 
