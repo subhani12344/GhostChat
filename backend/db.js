@@ -392,11 +392,13 @@ async function initDb() {
     } catch (err) {
       console.warn('⚠️ PostgreSQL connection failed. Falling back to local JSON database.', err.message);
       usePostgres = false;
+      await seedAdminUsers();
     }
   } else {
     console.log('📁 No PostgreSQL config environment variables found. Using local JSON database (database.json).');
     usePostgres = false;
     readJsonDb();
+    await seedAdminUsers();
   }
 }
 
