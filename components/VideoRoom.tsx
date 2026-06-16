@@ -11,6 +11,9 @@ import TermsModal from './TermsModal';
 import PeerProfileCard from './PeerProfileCard';
 import AuthModal from './AuthModal';
 import Navbar from './Navbar';
+import FollowRequestPopup from './FollowRequestPopup';
+import FollowBackPopup from './FollowBackPopup';
+import { useProfileSync, ProfileData } from '../hooks/useProfileSync';
 import { Video, MessageSquare, Volume2, VideoOff, MicOff, RefreshCw, Square, UserCheck, PhoneCall } from 'lucide-react';
 
 interface Message {
@@ -96,6 +99,7 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [isOfflineSim, setIsOfflineSim] = useState(false);
   const [incomingFollowRequest, setIncomingFollowRequest] = useState<string | null>(null);
+  const [followBackTarget, setFollowBackTarget] = useState<string | null>(null);
   const [incomingInvite, setIncomingInvite] = useState<{ senderUsername: string; roomId: string } | null>(null);
 
   // Viewport Resize Adjustments
@@ -124,8 +128,22 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
     }
   }, [router]);
 
+  useProfileSync(
+    socket,
+    useCallback((data: ProfileData) => {
+      if (currentUser && currentUser.username === data.username) {
+        const updated = { ...currentUser, ...data };
+        setCurrentUser(updated);
+        localStorage.setItem('ghostchat_user', JSON.stringify(updated));
+      }
+    }, [currentUser]),
+    useCallback((data: ProfileData) => {
+      // Peer updates are handled by PeerProfileCard directly
+    }, [])
+  );
+
   // ─── Stable helpers via useRef so they can safely be called inside effects ───
-  const appendMessageRef = useRef<(sender: 'self' | 'stranger' | 'system', text: string) => void>();
+  const appendMessageRef = useRef<(sender: 'self' | 'stranger' | 'system', text: string) => void>(undefined);
   const appendMessage = useCallback((sender: 'self' | 'stranger' | 'system', text: string) => {
     const formattedTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     setMessages((prev) => [
@@ -139,7 +157,7 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
     appendMessageRef.current?.('system', text);
   }, []);
 
-  const stopLocalTracksRef = useRef<() => void>();
+  const stopLocalTracksRef = useRef<() => void>(undefined);
   const stopLocalTracks = useCallback(() => {
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((track) => track.stop());
@@ -149,7 +167,7 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
   }, []);
   stopLocalTracksRef.current = stopLocalTracks;
 
-  const cleanPeerConnectionRef = useRef<() => void>();
+  const cleanPeerConnectionRef = useRef<() => void>(undefined);
   const cleanPeerConnection = useCallback(() => {
     if (peerRef.current) {
       peerRef.current.close();
@@ -364,6 +382,17 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
       appendMessageRef.current?.('system', `@${accepterUsername} accepted your follow request!`);
     });
 
+    sock.on('follow_back_prompt', ({ targetUsername }: { targetUsername: string }) => {
+      setFollowBackTarget(targetUsername);
+    });
+
+    sock.on('account_action', ({ type, message, until }: { type: string; message: string; until?: string }) => {
+      appendMessageRef.current?.('system', `⚠️ ${message}`);
+      if (type === 'permanent_ban' || type === 'suspended' || type === 'ip_banned') {
+        setTimeout(() => router.push('/'), 3000);
+      }
+    });
+
     sock.on('private_invite_incoming', ({ senderUsername, roomId }: { senderUsername: string; roomId: string }) => {
       setIncomingInvite({ senderUsername, roomId });
     });
@@ -377,22 +406,64 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
   // ─── Action handlers ─────────────────────────────────────────────────────
   const handleAcceptFollowIncoming = async () => {
     if (!incomingFollowRequest) return;
+    const sender = incomingFollowRequest;
     const token = localStorage.getItem('ghostchat_token');
     if (!token) return;
     try {
       const res = await fetch(`${serverUrl}/api/follow/accept`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ targetUsername: incomingFollowRequest })
+        body: JSON.stringify({ targetUsername: sender })
       });
       if (res.ok) {
-        socketRef.current?.emit('follow_accept', { targetUsername: incomingFollowRequest });
-        appendMessage('system', `You are now following @${incomingFollowRequest}!`);
+        socketRef.current?.emit('follow_accept', { targetUsername: sender });
+        appendMessage('system', `You are now followed by @${sender}!`);
+        setIncomingFollowRequest(null);
+        // follow_back_prompt will come from server; as fallback also set locally:
+        setFollowBackTarget(sender);
       }
     } catch (err) {
       console.error('Failed to accept follow request:', err);
-    } finally {
       setIncomingFollowRequest(null);
+    }
+  };
+
+  const handleDeclineFollowIncoming = async () => {
+    if (!incomingFollowRequest) return;
+    const sender = incomingFollowRequest;
+    setIncomingFollowRequest(null);
+    const token = localStorage.getItem('ghostchat_token');
+    if (!token) return;
+    try {
+      await fetch(`${serverUrl}/api/follow/decline`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ targetUsername: sender })
+      });
+      // Request persisted in notifications by server — user can accept later
+    } catch (err) {
+      console.error('Failed to decline follow request:', err);
+    }
+  };
+
+  const handleFollowBackAction = async () => {
+    if (!followBackTarget) return;
+    const token = localStorage.getItem('ghostchat_token');
+    if (!token) { setFollowBackTarget(null); return; }
+    try {
+      const res = await fetch(`${serverUrl}/api/follow/request`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ targetUsername: followBackTarget })
+      });
+      if (res.ok) {
+        socketRef.current?.emit('follow_request', { targetUsername: followBackTarget });
+        appendMessage('system', `You sent a follow request to @${followBackTarget}!`);
+      }
+    } catch (err) {
+      console.error('Follow back failed:', err);
+    } finally {
+      setFollowBackTarget(null);
     }
   };
 
@@ -739,7 +810,7 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
               onSendMessage={handleSendMessage}
               onTyping={handleTyping}
               isConnected={isConnected}
-              strangerTyping={strangerTyping}
+              isTyping={strangerTyping}
             />
           </div>
 
@@ -764,31 +835,24 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
       <ReportModal isOpen={reportOpen} onClose={() => setReportOpen(false)} onSubmit={handleReportAbuse} />
       <TermsModal isOpen={showTerms} onAccept={() => setShowTerms(false)} />
 
-      {/* Incoming follow request dialog */}
+      {/* Rich Follow Request Popup */}
       {incomingFollowRequest && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-xs p-4">
-          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl border border-brand-gray-mid/30 text-center space-y-4 animate-in zoom-in-95 duration-200">
-            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-blue-50 border border-blue-100 text-blue-600 animate-bounce">
-              <UserCheck size={24} />
-            </div>
-            <div className="space-y-1.5">
-              <h4 className="font-extrabold text-brand-black text-lg">Follow Request</h4>
-              <p className="text-xs text-brand-black/60 leading-relaxed">
-                <strong className="font-extrabold text-brand-black">@{incomingFollowRequest}</strong> sent you a follow request.
-              </p>
-            </div>
-            <div className="flex gap-3 pt-2">
-              <button onClick={handleAcceptFollowIncoming}
-                className="flex-1 rounded-xl bg-brand-black py-2.5 text-xs font-bold uppercase tracking-wider text-white transition-all hover:bg-brand-black/90 active:scale-95 cursor-pointer">
-                Accept
-              </button>
-              <button onClick={() => setIncomingFollowRequest(null)}
-                className="rounded-xl border border-brand-gray-mid/60 px-5 py-2.5 text-xs font-bold uppercase tracking-wider text-brand-black hover:bg-brand-gray-light cursor-pointer">
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
+        <FollowRequestPopup
+          senderUsername={incomingFollowRequest}
+          serverUrl={serverUrl}
+          onAccept={handleAcceptFollowIncoming}
+          onDecline={handleDeclineFollowIncoming}
+        />
+      )}
+
+      {/* Follow Back Popup */}
+      {followBackTarget && !incomingFollowRequest && (
+        <FollowBackPopup
+          targetUsername={followBackTarget}
+          serverUrl={serverUrl}
+          onFollowBack={handleFollowBackAction}
+          onSkip={() => setFollowBackTarget(null)}
+        />
       )}
 
       {/* Incoming call invite dialog */}

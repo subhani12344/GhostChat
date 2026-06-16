@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { X, Camera, Search, UserCheck, UserMinus, Heart, PhoneCall, Globe, FileText, Check, LogOut, AlertCircle, RefreshCw, User } from 'lucide-react';
 import { Socket } from 'socket.io-client';
 import { useRouter } from 'next/navigation';
+import ProfilePreviewModal from './ProfilePreviewModal';
 
 interface ProfileDrawerProps {
   isOpen: boolean;
@@ -43,6 +44,7 @@ export default function ProfileDrawer({
   const [listData, setListData] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [listLoading, setListLoading] = useState(false);
+  const [selectedPreviewUsername, setSelectedPreviewUsername] = useState<string | null>(null);
 
   const [callingState, setCallingState] = useState<any>(null);
 
@@ -202,6 +204,13 @@ export default function ProfileDrawer({
         setProfile((prev: any) => ({ ...prev, nickname: data.user.nickname, bio: data.user.bio, profile_img: data.user.profile_img }));
         if (onProfileUpdate) onProfileUpdate({ username: currentUser!.username });
         setEditMode(false);
+
+        // Broadcast profile sync via API
+        fetch(`${serverUrl}/api/profile/sync`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({ nickname, bio, profile_img: profileImg })
+        }).catch(err => console.error('Failed to trigger profile sync broadcast:', err));
       } else {
         const errData = await res.json().catch(() => ({}));
         setError(errData.message || 'Failed to save profile changes');
@@ -340,7 +349,10 @@ export default function ProfileDrawer({
                 </div>
               ) : filteredList.map(item => (
                 <div key={item.username} className="flex items-center justify-between gap-3 py-3 border-b border-gray-50 last:border-0">
-                  <div className="flex items-center gap-3 min-w-0">
+                  <div 
+                    onClick={() => setSelectedPreviewUsername(item.username)}
+                    className="flex items-center gap-3 min-w-0 cursor-pointer hover:opacity-80 transition-opacity"
+                  >
                     {item.profile_img ? (
                       <img src={item.profile_img} alt={item.username} className="h-10 w-10 rounded-xl object-cover border border-gray-100 shrink-0" />
                     ) : (
@@ -594,6 +606,20 @@ export default function ProfileDrawer({
             </div>
           </div>
         </div>
+      )}
+      {/* Profile Preview Modal */}
+      {selectedPreviewUsername && (
+        <ProfilePreviewModal
+          username={selectedPreviewUsername}
+          serverUrl={serverUrl}
+          socket={socket}
+          onClose={() => {
+            setSelectedPreviewUsername(null);
+            if (activeListTab) {
+              fetchList(activeListTab);
+            }
+          }}
+        />
       )}
     </div>
   );

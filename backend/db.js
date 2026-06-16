@@ -10,11 +10,13 @@ const JSON_DB_PATH = path.join(__dirname, 'database.json');
 const initialJsonDb = {
   users: [],
   bans: [],
+  ip_bans: [],
   reports: [],
   feedbacks: [],
   otp_verifications: [],
   followers: [],
-  notifications: []
+  notifications: [],
+  anon_counter: { next: 1 }
 };
 
 // Load JSON DB
@@ -27,15 +29,11 @@ function readJsonDb() {
     const data = fs.readFileSync(JSON_DB_PATH, 'utf8');
     const parsed = JSON.parse(data);
     // Ensure nested arrays exist for backwards compatibility
-    if (!parsed.otp_verifications) {
-      parsed.otp_verifications = [];
-    }
-    if (!parsed.followers) {
-      parsed.followers = [];
-    }
-    if (!parsed.notifications) {
-      parsed.notifications = [];
-    }
+    if (!parsed.otp_verifications) parsed.otp_verifications = [];
+    if (!parsed.followers) parsed.followers = [];
+    if (!parsed.notifications) parsed.notifications = [];
+    if (!parsed.ip_bans) parsed.ip_bans = [];
+    if (!parsed.anon_counter) parsed.anon_counter = { next: 1 };
     return parsed;
   } catch (err) {
     console.error('Error reading local JSON database:', err);
@@ -173,6 +171,33 @@ async function initDb() {
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
       `);
+
+      // IP/device/fingerprint bans for anonymous users
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS ip_bans (
+          id SERIAL PRIMARY KEY,
+          target_type VARCHAR(30) NOT NULL, -- 'ip', 'device', 'fingerprint'
+          target_value VARCHAR(500) NOT NULL,
+          reason TEXT,
+          expires_at TIMESTAMP,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(target_type, target_value)
+        );
+      `);
+
+      // Anonymous sequential ID counter
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS anon_counter (
+          id INTEGER PRIMARY KEY DEFAULT 1,
+          next_num INTEGER DEFAULT 1,
+          CHECK (id = 1)
+        );
+      `);
+      await pool.query(`INSERT INTO anon_counter (id, next_num) VALUES (1, 1) ON CONFLICT (id) DO NOTHING;`);
+
+      // Progressive moderation columns on users
+      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS suspended_until TIMESTAMP;`);
+      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS lifetime_reports INTEGER DEFAULT 0;`);
 
       console.log('📐 PostgreSQL tables verified.');
     } catch (err) {
@@ -745,6 +770,140 @@ const db = {
       );
       writeJsonDb(data);
     }
+  },
+
+  async declineFollowRequest(sender, recipient) {
+    // Remove pending follow relationship
+    if (usePostgres) {
+      await pool.query(
+        "DELETE FROM followers WHERE follower_username = $1 AND following_username = $2 AND status = 'pending'",
+        [sender, recipient]
+      );
+    } else {
+      const data = readJsonDb();
+      data.followers = data.followers.filter(
+        f => !(f.follower_username === sender && f.following_username === recipient && f.status === 'pending')
+      );
+      writeJsonDb(data);
+    }
+    // Also clean up the notification
+    await db.deleteFollowRequestNotification(sender, recipient);
+  },
+
+  // --- ANONYMOUS ID POOL ---
+  async getNextAnonId() {
+    if (usePostgres) {
+      const res = await pool.query(
+        'UPDATE anon_counter SET next_num = next_num + 1 WHERE id = 1 RETURNING next_num'
+      );
+      return res.rows[0].next_num - 1; // return the value before increment
+    } else {
+      const data = readJsonDb();
+      const num = data.anon_counter.next;
+      data.anon_counter.next = num + 1;
+      writeJsonDb(data);
+      return num;
+    }
+  },
+
+  // --- IP / DEVICE BANNING ---
+  async createIpBan(targetType, targetValue, reason, expiresAt) {
+    if (usePostgres) {
+      const res = await pool.query(
+        'INSERT INTO ip_bans (target_type, target_value, reason, expires_at) VALUES ($1, $2, $3, $4) ON CONFLICT (target_type, target_value) DO UPDATE SET reason = $3, expires_at = $4 RETURNING *',
+        [targetType, targetValue, reason, expiresAt]
+      );
+      return res.rows[0];
+    } else {
+      const data = readJsonDb();
+      const existing = data.ip_bans.findIndex(b => b.target_type === targetType && b.target_value === targetValue);
+      const ban = { id: Date.now(), target_type: targetType, target_value: targetValue, reason, expires_at: expiresAt ? new Date(expiresAt).toISOString() : null, created_at: new Date().toISOString() };
+      if (existing !== -1) data.ip_bans[existing] = ban;
+      else data.ip_bans.push(ban);
+      writeJsonDb(data);
+      return ban;
+    }
+  },
+
+  async isIpBanned(ip) {
+    if (usePostgres) {
+      const res = await pool.query(
+        "SELECT * FROM ip_bans WHERE target_type = 'ip' AND target_value = $1 AND (expires_at IS NULL OR expires_at > NOW())",
+        [ip]
+      );
+      return res.rows[0] || null;
+    } else {
+      const data = readJsonDb();
+      const ban = data.ip_bans.find(b => b.target_type === 'ip' && b.target_value === ip);
+      if (!ban) return null;
+      if (ban.expires_at && new Date(ban.expires_at) < new Date()) {
+        data.ip_bans = data.ip_bans.filter(b => !(b.target_type === 'ip' && b.target_value === ip));
+        writeJsonDb(data);
+        return null;
+      }
+      return ban;
+    }
+  },
+
+  async isFingerprintBanned(fingerprint) {
+    if (usePostgres) {
+      const res = await pool.query(
+        "SELECT * FROM ip_bans WHERE target_type = 'fingerprint' AND target_value = $1 AND (expires_at IS NULL OR expires_at > NOW())",
+        [fingerprint]
+      );
+      return res.rows[0] || null;
+    } else {
+      const data = readJsonDb();
+      const ban = data.ip_bans.find(b => b.target_type === 'fingerprint' && b.target_value === fingerprint);
+      if (!ban) return null;
+      if (ban.expires_at && new Date(ban.expires_at) < new Date()) return null;
+      return ban;
+    }
+  },
+
+  // --- PROGRESSIVE MODERATION ---
+  async incrementLifetimeReports(username) {
+    if (usePostgres) {
+      const res = await pool.query(
+        'UPDATE users SET lifetime_reports = COALESCE(lifetime_reports, 0) + 1 WHERE LOWER(username) = LOWER($1) RETURNING lifetime_reports',
+        [username]
+      );
+      return res.rows[0]?.lifetime_reports || 0;
+    } else {
+      const data = readJsonDb();
+      const idx = data.users.findIndex(u => u.username.toLowerCase() === username.toLowerCase());
+      if (idx !== -1) {
+        data.users[idx].lifetime_reports = (data.users[idx].lifetime_reports || 0) + 1;
+        writeJsonDb(data);
+        return data.users[idx].lifetime_reports;
+      }
+      return 0;
+    }
+  },
+
+  async setUserSuspension(username, expiresAt) {
+    if (usePostgres) {
+      await pool.query(
+        'UPDATE users SET suspended_until = $2 WHERE LOWER(username) = LOWER($1)',
+        [username, expiresAt]
+      );
+    } else {
+      const data = readJsonDb();
+      const idx = data.users.findIndex(u => u.username.toLowerCase() === username.toLowerCase());
+      if (idx !== -1) {
+        data.users[idx].suspended_until = expiresAt ? new Date(expiresAt).toISOString() : null;
+        writeJsonDb(data);
+      }
+    }
+  },
+
+  async isUserSuspended(username) {
+    const user = await db.getUserByUsername(username);
+    if (!user) return null;
+    if (user.suspended_until && new Date(user.suspended_until) > new Date()) {
+      return { suspended_until: user.suspended_until };
+    }
+    return null;
   }
 };
 

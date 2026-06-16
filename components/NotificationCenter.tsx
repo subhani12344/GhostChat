@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Bell, Check, X, UserCheck, Heart, Video, PhoneCall } from 'lucide-react';
+import { Bell, Check, X, UserCheck, Heart, Video, PhoneCall, AlertTriangle, Ban, AlertCircle, Sparkles } from 'lucide-react';
 import { Socket } from 'socket.io-client';
 import { useRouter } from 'next/navigation';
 
@@ -268,15 +268,41 @@ export default function NotificationCenter({
                         <PhoneCall size={14} />
                       </div>
                     )}
+                    {notif.type === 'report_warning' && (
+                      <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-50 border border-amber-100 text-amber-600">
+                        <AlertTriangle size={14} />
+                      </div>
+                    )}
+                    {notif.type === 'suspension' && (
+                      <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-red-50 border border-red-100 text-red-600">
+                        <Ban size={14} />
+                      </div>
+                    )}
+                    {notif.type === 'suspension_lifted' && (
+                      <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-50 border border-emerald-100 text-emerald-600">
+                        <Sparkles size={14} />
+                      </div>
+                    )}
+                    {notif.type === 'report_confirmed' && (
+                      <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-50 border border-blue-100 text-blue-600">
+                        <AlertCircle size={14} />
+                      </div>
+                    )}
                   </div>
 
                   {/* Body */}
                   <div className="flex-1 min-w-0">
                     <p className="text-xs text-brand-black leading-snug">
-                      <strong className="font-extrabold">@{notif.sender_username}</strong>{' '}
-                      {notif.type === 'follow_request' && 'requested to follow you.'}
-                      {notif.type === 'follow_accept' && 'accepted your follow request.'}
-                      {notif.type === 'invite' && 'invited you to join a private room.'}
+                      {notif.sender_username === 'system' ? (
+                        <span>{notif.details}</span>
+                      ) : (
+                        <>
+                          <strong className="font-extrabold">@{notif.sender_username}</strong>{' '}
+                          {notif.type === 'follow_request' && 'requested to follow you.'}
+                          {notif.type === 'follow_accept' && 'accepted your follow request.'}
+                          {notif.type === 'invite' && 'invited you to join a private room.'}
+                        </>
+                      )}
                     </p>
 
                     {/* Action buttons */}
@@ -314,7 +340,11 @@ export default function NotificationCenter({
                       </div>
                     )}
 
-                    {notif.type === 'follow_accept' && (
+                    {(notif.type === 'follow_accept' || 
+                      notif.type === 'report_warning' || 
+                      notif.type === 'suspension' || 
+                      notif.type === 'suspension_lifted' || 
+                      notif.type === 'report_confirmed') && (
                       <button
                         onClick={() => handleDeleteNotif(notif.id)}
                         className="text-[10px] text-brand-black/40 hover:text-brand-black transition-colors mt-1 font-bold underline"

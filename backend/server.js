@@ -422,11 +422,18 @@ app.post('/api/feedback', async (req, res) => {
 });
 
 // Reports Submit (from public reports page or chat)
+// Reports Submit
 app.post('/api/reports', async (req, res) => {
-  const { reporter_username, reported_username, reason, details } = req.body;
-  const ip = req.ip || req.headers['x-forwarded-for'] || '127.0.0.1';
+  const { reporter_username, reported_username, reason, details, fingerprint } = req.body;
+  const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
 
   try {
+    // Check if anonymous reporter is already banned
+    const ipBanned = await db.isIpBanned(ip);
+    if (ipBanned) {
+      return res.status(403).json({ message: 'You are currently banned from this platform.' });
+    }
+
     const report = await db.createReport({
       reporter_ip: ip,
       reported_ip: ip,
@@ -436,44 +443,78 @@ app.post('/api/reports', async (req, res) => {
       details
     });
 
-    if (reported_username && reported_username !== 'Stranger') {
-      const user = await db.getUserByUsername(reported_username);
-      if (user && user.email) {
-        const reportCount = await db.getReportsCountForUser(reported_username);
+    // Notify reporter
+    if (reporter_username && !reporter_username.startsWith('Guest') && !reporter_username.startsWith('Anonymous')) {
+      const reporterNotif = await db.createNotification(reporter_username, 'system', 'report_confirmed', `Your report about ${reported_username || 'a user'} has been received.`);
+      const reporterSocketId = onlineUsers.get(reporter_username);
+      if (reporterSocketId) {
+        io.to(reporterSocketId).emit('new_notification', reporterNotif);
+      }
+    }
 
-        if (reportCount >= 5) {
-          // BANNED AND DELETED ACCOUNT IMMEDIATELY
+    if (reported_username && reported_username !== 'Stranger' && !reported_username.startsWith('Guest') && !reported_username.startsWith('Anonymous')) {
+      const user = await db.getUserByUsername(reported_username);
+      if (user) {
+        // Increment lifetime reports
+        const lifetimeReports = await db.incrementLifetimeReports(reported_username);
+
+        // Find the reported user's socket to notify them
+        const reportedSocketId = onlineUsers.get(reported_username);
+
+        if (lifetimeReports >= 15) {
+          // PERMANENT DELETE at 15 lifetime reports
           const banExpires = new Date();
-          banExpires.setFullYear(banExpires.getFullYear() + 99); // Permanent ban
-          await db.createBan(reported_username, `Banned due to receiving ${reportCount} reports of abuse.`, banExpires);
+          banExpires.setFullYear(banExpires.getFullYear() + 99);
+          await db.createBan(reported_username, `Permanently banned: ${lifetimeReports} total abuse reports.`, banExpires);
           await db.deleteUser(reported_username);
 
-          // Send termination email
-          await sendEmail(
-            user.email,
-            'GhostChat Account Permanently Banned and Deleted',
-            `Hello ${reported_username},\n\nYour GhostChat account has been permanently banned and deleted due to receiving 5 or more abuse reports. Your active socket connection has been closed.`
-          );
-
-          // Disconnect active socket
-          for (const [socketId, socketUser] of users.entries()) {
-            if (socketUser.username === reported_username) {
-              socketUser.socket.emit('chat_message', { 
-                text: '🔴 You have been permanently banned due to receiving 5 or more reports.', 
-                from: 'system' 
-              });
-              socketUser.socket.disconnect(true);
-              console.log(`🔌 Disconnected banned user socket: ${reported_username}`);
-            }
+          if (reportedSocketId) {
+            io.to(reportedSocketId).emit('account_action', {
+              type: 'permanent_ban',
+              message: 'Your account has been permanently deleted due to repeated abuse violations (15+ reports).'
+            });
+            const sock = io.sockets.sockets.get(reportedSocketId);
+            if (sock) sock.disconnect(true);
           }
+          if (user.email) await sendEmail(user.email, 'GhostChat Account Permanently Deleted', `Hello ${reported_username},\n\nYour GhostChat account has been permanently deleted due to accumulating 15 or more abuse reports.`);
+        } else if (lifetimeReports >= 10 && lifetimeReports < 15) {
+          // Second 20-day suspension at 10 reports
+          const suspendUntil = new Date();
+          suspendUntil.setDate(suspendUntil.getDate() + 20);
+          await db.setUserSuspension(reported_username, suspendUntil);
+          const suspendNotif = await db.createNotification(reported_username, 'system', 'suspension', `Second suspension issued (${lifetimeReports} total reports). Account suspended for 20 days until ${suspendUntil.toLocaleDateString()}.`);
+          if (reportedSocketId) {
+            io.to(reportedSocketId).emit('new_notification', suspendNotif);
+            io.to(reportedSocketId).emit('account_action', { type: 'suspended', until: suspendUntil.toISOString(), message: `Your account has been suspended for 20 days due to repeated reports.` });
+          }
+          if (user.email) await sendEmail(user.email, 'GhostChat Account Suspended (20 days)', `Hello ${reported_username},\n\nYour account has been suspended for 20 days (${lifetimeReports} total reports). It will be restored on ${suspendUntil.toLocaleDateString()}.`);
+        } else if (lifetimeReports >= 5 && lifetimeReports < 10) {
+          // First 20-day suspension at 5 reports
+          const suspendUntil = new Date();
+          suspendUntil.setDate(suspendUntil.getDate() + 20);
+          await db.setUserSuspension(reported_username, suspendUntil);
+          const suspendNotif = await db.createNotification(reported_username, 'system', 'suspension', `Your account has been suspended for 20 days (${lifetimeReports} reports received). Suspended until ${suspendUntil.toLocaleDateString()}.`);
+          if (reportedSocketId) {
+            io.to(reportedSocketId).emit('new_notification', suspendNotif);
+            io.to(reportedSocketId).emit('account_action', { type: 'suspended', until: suspendUntil.toISOString(), message: `Your account has been suspended for 20 days.` });
+          }
+          if (user.email) await sendEmail(user.email, 'GhostChat Account Suspended', `Hello ${reported_username},\n\nYour account has been suspended for 20 days due to ${lifetimeReports} abuse reports. You can return on ${suspendUntil.toLocaleDateString()}.`);
         } else {
-          // SEND WARNING EMAIL
-          await sendEmail(
-            user.email,
-            'GhostChat Account Abuse Warning',
-            `Hello ${reported_username},\n\nWarning: Your GhostChat account has been reported for: "${reason}". Details: ${details || 'No details provided'}.\n\nNote: If you receive 5 or more reports, your account will be permanently banned and deleted. Current reports: ${reportCount}/5.`
-          );
+          // Warning (< 5 reports)
+          const warnNotif = await db.createNotification(reported_username, 'system', 'report_warning', `Warning: You have received ${lifetimeReports} abuse report(s). Reason: ${reason}. Accumulating 5 reports will result in a 20-day suspension.`);
+          if (reportedSocketId) {
+            io.to(reportedSocketId).emit('new_notification', warnNotif);
+          }
+          if (user.email) await sendEmail(user.email, 'GhostChat Abuse Warning', `Hello ${reported_username},\n\nYou have received ${lifetimeReports}/5 abuse reports. Reason: ${reason}. 5 reports = 20-day suspension. 15 total = permanent ban.`);
         }
+      }
+    } else if (reported_username && (reported_username.startsWith('Guest') || reported_username.startsWith('Anonymous'))) {
+      // Anonymous user abuse: ban their IP and fingerprint
+      const banExpires = new Date();
+      banExpires.setDate(banExpires.getDate() + 20);
+      await db.createIpBan('ip', ip, `Anonymous abuse report: ${reason}`, banExpires);
+      if (fingerprint) {
+        await db.createIpBan('fingerprint', fingerprint, `Anonymous abuse report: ${reason}`, banExpires);
       }
     }
 
@@ -641,9 +682,31 @@ app.post('/api/follow/accept', authenticateToken, async (req, res) => {
       io.to(targetSocketId).emit('follow_update');
     }
 
+    // Emit follow_back_prompt to the accepter so they see a "Follow Back?" popup
+    const accepterSocketId = onlineUsers.get(req.user.username);
+    if (accepterSocketId) {
+      io.to(accepterSocketId).emit('follow_back_prompt', { targetUsername });
+    }
+
     res.json({ message: 'Follow request accepted', relationship });
   } catch (err) {
     console.error('Accept follow error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Decline Follow Request
+app.post('/api/follow/decline', authenticateToken, async (req, res) => {
+  if (req.user.isAnonymous) {
+    return res.status(403).json({ message: 'Guests cannot perform follow actions' });
+  }
+  const { targetUsername } = req.body;
+  if (!targetUsername) return res.status(400).json({ message: 'Target username is required' });
+  try {
+    await db.declineFollowRequest(targetUsername, req.user.username);
+    res.json({ message: 'Follow request declined' });
+  } catch (err) {
+    console.error('Decline follow error:', err);
     res.status(500).json({ message: 'Internal server error' });
   }
 });
@@ -762,6 +825,79 @@ app.get('/api/followers/mutual-online', authenticateToken, async (req, res) => {
 });
 
 
+// REST: Assign Anonymous Sequential ID
+app.post('/api/anonymous/assign', async (req, res) => {
+  const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+  const { fingerprint } = req.body;
+
+  // Check if IP is banned
+  const ipBanned = await db.isIpBanned(ip);
+  if (ipBanned) {
+    const until = ipBanned.expires_at ? new Date(ipBanned.expires_at).toLocaleDateString() : 'indefinitely';
+    return res.status(403).json({ message: `Access denied. Your network is banned until ${until}.`, banned: true });
+  }
+
+  // Check if fingerprint is banned
+  if (fingerprint) {
+    const fpBanned = await db.isFingerprintBanned(fingerprint);
+    if (fpBanned) {
+      const until = fpBanned.expires_at ? new Date(fpBanned.expires_at).toLocaleDateString() : 'indefinitely';
+      return res.status(403).json({ message: `Access denied. Your device is banned until ${until}.`, banned: true });
+    }
+  }
+
+  try {
+    const num = await db.getNextAnonId();
+    const anonId = String(num).padStart(6, '0');
+    const anonUsername = `Anonymous_${anonId}`;
+    const token = jwt.sign({ username: anonUsername, isAnonymous: true, anonNum: num }, JWT_SECRET, { expiresIn: '24h' });
+    res.json({ username: anonUsername, displayName: `Anonymous #${anonId}`, token });
+  } catch (err) {
+    console.error('Anon assign error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Release Anonymous Sequential ID
+app.all('/api/anonymous/release', (req, res) => {
+  res.json({ message: 'Anonymous ID released' });
+});
+
+// REST: Check IP ban status
+app.get('/api/bans/check', async (req, res) => {
+  const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+  const { fingerprint } = req.query;
+  const ipBanned = await db.isIpBanned(ip);
+  if (ipBanned) return res.json({ banned: true, reason: ipBanned.reason, expires_at: ipBanned.expires_at });
+  if (fingerprint) {
+    const fpBanned = await db.isFingerprintBanned(fingerprint);
+    if (fpBanned) return res.json({ banned: true, reason: fpBanned.reason, expires_at: fpBanned.expires_at });
+  }
+  return res.json({ banned: false });
+});
+
+// REST: Profile sync broadcast (called after profile update)
+app.post('/api/profile/sync', authenticateToken, async (req, res) => {
+  const { nickname, bio, profile_img } = req.body;
+  const username = req.user.username;
+  // Broadcast to all sockets of this user
+  const socketId = onlineUsers.get(username);
+  if (socketId) {
+    io.to(socketId).emit('profile_updated', { username, nickname, bio, profile_img });
+  }
+  // Also broadcast to all users who follow them (so their peer profile cards update)
+  try {
+    const followers = await db.getFollowers(username);
+    followers.forEach(follower => {
+      const followerSocketId = onlineUsers.get(follower.username);
+      if (followerSocketId) {
+        io.to(followerSocketId).emit('peer_profile_updated', { username, nickname, bio, profile_img });
+      }
+    });
+  } catch { /* ignore */ }
+  res.json({ message: 'Profile sync broadcast sent' });
+});
+
 // Map of online registered usernames -> socketId
 const onlineUsers = new Map();
 
@@ -878,12 +1014,31 @@ io.on('connection', async (socket) => {
   const ip = socket.handshake.address || socket.conn.remoteAddress || '127.0.0.1';
 
   // Check IP Ban
-  const banned = await db.isBanned(ip);
-  if (banned) {
-    socket.emit('chat_message', { text: `🔴 Access Denied: You are permanently banned. Reason: ${banned.reason}`, from: 'system' });
-    console.log(`🚫 Banned connection rejected: ${ip}`);
+  const rawIp = socket.handshake.address || socket.conn.remoteAddress || '127.0.0.1';
+  const ip = rawIp.replace('::ffff:', '');
+
+  const ipBanned = await db.isIpBanned(ip);
+  if (ipBanned) {
+    socket.emit('account_action', { type: 'ip_banned', message: `Your network has been temporarily banned. Reason: ${ipBanned.reason}` });
     socket.disconnect(true);
     return;
+  }
+
+  // Check username ban / suspension
+  if (socket.user && !socket.user.isAnonymous) {
+    const userBan = await db.isBanned(socket.user.username);
+    if (userBan) {
+      socket.emit('account_action', { type: 'permanent_ban', message: `Your account has been permanently banned. Reason: ${userBan.reason}` });
+      socket.disconnect(true);
+      return;
+    }
+    const suspended = await db.isUserSuspended(socket.user.username);
+    if (suspended) {
+      const until = new Date(suspended.suspended_until).toLocaleDateString();
+      socket.emit('account_action', { type: 'suspended', until: suspended.suspended_until, message: `Your account is suspended until ${until}.` });
+      socket.disconnect(true);
+      return;
+    }
   }
 
   totalOnline++;
@@ -1000,6 +1155,8 @@ io.on('connection', async (socket) => {
       io.to(targetSocketId).emit('follow_accepted_incoming', { accepterUsername: accepter });
       io.to(targetSocketId).emit('follow_update');
     }
+    // Also emit follow_back_prompt to the accepter
+    io.to(socket.id).emit('follow_back_prompt', { targetUsername });
   });
 
   // Direct calls

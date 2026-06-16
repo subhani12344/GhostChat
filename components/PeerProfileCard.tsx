@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { UserPlus, UserCheck, ShieldAlert, X, Heart } from 'lucide-react';
 import { Socket } from 'socket.io-client';
+import { useProfileSync } from '../hooks/useProfileSync';
 
 interface PeerProfileCardProps {
   partnerUsername: string;
@@ -66,6 +67,16 @@ export default function PeerProfileCard({ partnerUsername, serverUrl, socket, on
       socket.off('follow_request_incoming', handleFollowUpdate);
     };
   }, [socket]);
+
+  useProfileSync(
+    socket,
+    () => {},
+    (data) => {
+      if (data.username === partnerUsername) {
+        setProfile((prev: any) => prev ? { ...prev, ...data } : prev);
+      }
+    }
+  );
 
   const handleFollowAction = async () => {
     if (!profile || actionLoading) return;
