@@ -263,8 +263,27 @@ export default function VideoTile({
 
   // Attach remote stream
   useEffect(() => {
-    if (remoteVideoRef.current && remoteStream && chatMode === 'video') {
-      remoteVideoRef.current.srcObject = remoteStream;
+    const video = remoteVideoRef.current;
+    if (video && remoteStream && chatMode === 'video') {
+      video.srcObject = remoteStream;
+      video.muted = false;
+      video.volume = 1.0;
+
+      const playVideo = async () => {
+        try {
+          await video.play();
+          console.log("Remote video/audio playing successfully.");
+        } catch (err) {
+          console.warn("Autoplay block detected. Attaching gesture fallback to start audio...", err);
+          const playOnGesture = () => {
+            video.play().then(() => {
+              document.removeEventListener('click', playOnGesture);
+            }).catch(e => console.error("Gesture play failed:", e));
+          };
+          document.addEventListener('click', playOnGesture);
+        }
+      };
+      playVideo();
     }
   }, [remoteStream, isConnected, chatMode]);
 

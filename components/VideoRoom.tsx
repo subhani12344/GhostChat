@@ -74,6 +74,7 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
   const socketRef = useRef<Socket | null>(null);
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
+  const iceQueueRef = useRef<RTCIceCandidateInit[]>([]);
 
   // Filter preferences
   const [interests, setInterests] = useState<string[]>([]);
@@ -183,6 +184,22 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
     }
   };
 
+  const processIceQueue = async () => {
+    const pc = peerRef.current;
+    if (!pc || !pc.remoteDescription || !pc.remoteDescription.type) return;
+    
+    while (iceQueueRef.current.length > 0) {
+      const candidate = iceQueueRef.current.shift();
+      if (candidate) {
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (e) {
+          console.error('Error adding queued ICE candidate:', e);
+        }
+      }
+    }
+  };
+
   useEffect(() => {
     console.log(`🔌 Connecting to GhostChat hub at: ${serverUrl}`);
     const token = localStorage.getItem('ghostchat_token');
@@ -232,8 +249,9 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
       setPartnerUsername(partnerUsername || null);
       appendSystemMessage('You are paired with a stranger! Say hello.');
 
-      // Clear previous peer connection
+      // Clear previous peer connection & ICE candidate queue
       cleanPeerConnection();
+      iceQueueRef.current = [];
 
       // Create new peer connection
       const pc = new RTCPeerConnection(ICE_SERVERS);
@@ -248,8 +266,26 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
 
       // Handle remote tracks
       pc.ontrack = (event) => {
-        console.log('Got remote track', event.streams[0]);
-        setRemoteStream(event.streams[0]);
+        console.log('Got remote track', event.track.kind, event.streams);
+        if (event.streams && event.streams[0]) {
+          setRemoteStream(event.streams[0]);
+        } else {
+          // Fallback: build stream dynamically from track
+          setRemoteStream((prev) => {
+            if (prev) {
+              try {
+                prev.addTrack(event.track);
+                return prev;
+              } catch (err) {
+                return prev;
+              }
+            } else {
+              const newStream = new MediaStream();
+              newStream.addTrack(event.track);
+              return newStream;
+            }
+          });
+        }
       };
 
       // Relay ICE candidates
@@ -278,6 +314,7 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         socketRef.current?.emit('answer', { answer });
+        await processIceQueue();
       } catch (e) {
         console.error('Failed to set offer / create answer', e);
       }
@@ -288,6 +325,7 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
       if (!pc) return;
       try {
         await pc.setRemoteDescription(new RTCSessionDescription(answer));
+        await processIceQueue();
       } catch (e) {
         console.error('Failed to set remote description from answer', e);
       }
@@ -295,11 +333,14 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
 
     socket.on('ice_candidate', async ({ candidate }: { candidate: RTCIceCandidateInit }) => {
       const pc = peerRef.current;
-      if (!pc) return;
-      try {
-        await pc.addIceCandidate(new RTCIceCandidate(candidate));
-      } catch (e) {
-        console.error('Error adding ICE candidate', e);
+      if (pc && pc.remoteDescription && pc.remoteDescription.type) {
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (e) {
+          console.error('Error adding ICE candidate', e);
+        }
+      } else {
+        iceQueueRef.current.push(candidate);
       }
     });
 
@@ -621,12 +662,12 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
       />
 
       <div
-        className={`flex-grow min-h-0 mx-auto w-full max-w-7xl ${
+        className={`flex-grow min-h-0 mx-auto w-full max-w-7xl overflow-hidden ${
           chatMode === 'video' ? 'p-0 lg:p-6' : 'p-3 md:p-6'
         }`}
       >
         <div
-          className={`flex h-full w-full ${
+          className={`flex h-full w-full overflow-hidden ${
             chatMode === 'video'
               ? 'flex-col lg:flex-row gap-0 lg:gap-6 relative'
               : 'flex-col lg:flex-row gap-4'
@@ -641,20 +682,6 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
               : 'flex-1 gap-4'
           }`}
         >
-          
-          {/* Filters overlay */}
-          {!isConnected && !isMatching && (
-            <div className={chatMode === 'video' ? 'absolute top-4 left-4 right-4 z-30 lg:relative lg:top-auto lg:left-auto lg:right-auto lg:z-10' : ''}>
-              <MatchingFilters
-                interests={interests}
-                setInterests={setInterests}
-                language={language}
-                setLanguage={setLanguage}
-                country={country}
-                setCountry={setCountry}
-              />
-            </div>
-          )}
 
           {/* Main Video tile */}
           <div className={chatMode === 'video' ? 'absolute inset-0 lg:relative lg:flex-1 w-full h-full lg:h-auto min-h-0' : 'flex-1 min-h-[300px]'}>
