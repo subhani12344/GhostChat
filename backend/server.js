@@ -128,6 +128,133 @@ if (process.env.SMTP_SERVICE) {
   });
 }
 
+// Unified dispatchEmail helper supporting Resend, Postmark, Mailgun APIs, with SMTP and Console fallbacks
+async function dispatchEmail({ to, subject, text, html }) {
+  const emailFrom = process.env.EMAIL_FROM || process.env.SMTP_USER || 'GhostChat <no-reply@ghostchat.com>';
+
+  // 1. Resend API Integration
+  if (process.env.RESEND_API_KEY) {
+    try {
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          from: emailFrom,
+          to: [to],
+          subject: subject,
+          text: text,
+          html: html || `<p>${text}</p>`
+        })
+      });
+      const data = await response.json();
+      if (response.ok) {
+        console.log(`✉️ [Resend] Email successfully sent to ${to}. Message ID: ${data.id}`);
+        return true;
+      } else {
+        throw new Error(data.message || JSON.stringify(data));
+      }
+    } catch (err) {
+      console.error('❌ [Resend] Failed to dispatch email:', err.message);
+    }
+  }
+
+  // 2. Postmark API Integration
+  if (process.env.POSTMARK_SERVER_TOKEN) {
+    try {
+      const response = await fetch('https://api.postmarkapp.com/email', {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+          'X-Postmark-Server-Token': process.env.POSTMARK_SERVER_TOKEN
+        },
+        body: JSON.stringify({
+          From: emailFrom,
+          To: to,
+          Subject: subject,
+          TextBody: text,
+          HtmlBody: html || `<p>${text}</p>`
+        })
+      });
+      const data = await response.json();
+      if (response.ok) {
+        console.log(`✉️ [Postmark] Email successfully sent to ${to}. Message ID: ${data.MessageID}`);
+        return true;
+      } else {
+        throw new Error(data.Message || JSON.stringify(data));
+      }
+    } catch (err) {
+      console.error('❌ [Postmark] Failed to dispatch email:', err.message);
+    }
+  }
+
+  // 3. Mailgun API Integration
+  if (process.env.MAILGUN_API_KEY && process.env.MAILGUN_DOMAIN) {
+    try {
+      const domain = process.env.MAILGUN_DOMAIN;
+      const apiKey = process.env.MAILGUN_API_KEY;
+      const auth = Buffer.from(`api:${apiKey}`).toString('base64');
+      const form = new URLSearchParams();
+      form.append('from', emailFrom);
+      form.append('to', to);
+      form.append('subject', subject);
+      form.append('text', text);
+      if (html) form.append('html', html);
+
+      const response = await fetch(`https://api.mailgun.net/v3/${domain}/messages`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Basic ${auth}`,
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        body: form.toString()
+      });
+      const data = await response.json();
+      if (response.ok) {
+        console.log(`✉️ [Mailgun] Email successfully sent to ${to}. Message: ${data.message}`);
+        return true;
+      } else {
+        throw new Error(data.message || JSON.stringify(data));
+      }
+    } catch (err) {
+      console.error('❌ [Mailgun] Failed to dispatch email:', err.message);
+    }
+  }
+
+  // 4. Nodemailer SMTP Fallback
+  if (transporter) {
+    try {
+      await transporter.sendMail({
+        from: emailFrom,
+        to,
+        subject,
+        text,
+        html: html || `<p>${text}</p>`
+      });
+      console.log(`✉️ [SMTP] Email successfully sent to ${to}`);
+      return true;
+    } catch (err) {
+      console.error('❌ [SMTP] Failed to send email via SMTP:', err.message);
+    }
+  }
+
+  // 5. Console Logging Fallback (Local Development)
+  console.log(`
+┌────────────────────────────────────────────────────────┐
+│                                                        │
+│   📧 [CONSOLE FALLBACK] GHOSTCHAT EMAIL NOTIFICATION  │
+│   👉 TO: ${to.toUpperCase()}                           │
+│   👉 SUBJECT: ${subject}                               │
+│   👉 BODY: ${text.substring(0, Math.min(text.length, 120))}...                 │
+│                                                        │
+└────────────────────────────────────────────────────────┘
+  `);
+  return false;
+}
+
 // Helper: send OTP
 async function sendOtpEmail(email, code) {
   const messageText = `Your GhostChat verification code is: ${code}. This code expires in 2 minutes.`;
@@ -139,52 +266,42 @@ async function sendOtpEmail(email, code) {
 │   📧 GHOSTCHAT OTP CODE FOR ${email.toUpperCase()}    │
 │   👉 CODE:  ${code}                                    │
 │   ⏱️  EXPIRES IN: 2 MINUTES                            │
+│   ⚠️  (Fallback code printed in Node console logs)      │
 │                                                        │
 └────────────────────────────────────────────────────────┘
   `);
 
-  if (transporter) {
-    try {
-      await transporter.sendMail({
-        from: `"GhostChat Security" <${process.env.SMTP_USER}>`,
-        to: email,
-        subject: 'GhostChat Account Verification Code',
-        text: messageText,
-        html: `<p>${messageText}</p>`
-      });
-      console.log(`✉️ Email OTP sent to ${email}`);
-    } catch (err) {
-      console.error('Failed to send SMTP email, using console logging fallback:', err.message);
-    }
-  }
+  await dispatchEmail({
+    to: email,
+    subject: 'GhostChat Account Verification Code',
+    text: messageText,
+    html: `
+      <div style="font-family: sans-serif; background-color: #060606; color: #ffffff; padding: 30px; border-radius: 20px; max-width: 480px; margin: 0 auto; border: 1px solid #333;">
+        <h2 style="color: #f43f5e; text-align: center; font-weight: bold; margin-bottom: 20px;">GhostChat Verification</h2>
+        <p style="font-size: 14px; color: #ccc; text-align: center;">Your verification OTP code is:</p>
+        <div style="background-color: #1a1a1a; padding: 15px; border-radius: 10px; font-size: 28px; font-weight: bold; text-align: center; letter-spacing: 5px; color: #ffffff; margin: 20px 0; border: 1px solid #444;">
+          ${code}
+        </div>
+        <p style="font-size: 12px; color: #888; text-align: center; margin-top: 20px;">This code is valid for 2 minutes. If you did not request this, you can safely ignore this email.</p>
+      </div>
+    `
+  });
 }
 
 // Generic Helper: Send email notifications
 async function sendEmail(to, subject, text) {
-  if (transporter) {
-    try {
-      await transporter.sendMail({
-        from: `"GhostChat Administration" <${process.env.SMTP_USER}>`,
-        to,
-        subject,
-        text
-      });
-      console.log(`✉️ Mail dispatched to: ${to}`);
-    } catch (err) {
-      console.error(`Failed to send email to ${to}:`, err.message);
-    }
-  } else {
-    console.log(`
-┌────────────────────────────────────────────────────────┐
-│                                                        │
-│   📧 GHOSTCHAT EMAIL NOTIFICATION                      │
-│   👉 TO: ${to.toUpperCase()}                           │
-│   👉 SUBJECT: ${subject}                               │
-│   👉 BODY: ${text.substring(0, Math.min(text.length, 60))}...                 │
-│                                                        │
-└────────────────────────────────────────────────────────┘
-    `);
-  }
+  await dispatchEmail({
+    to,
+    subject,
+    text,
+    html: `
+      <div style="font-family: sans-serif; background-color: #060606; color: #ffffff; padding: 30px; border-radius: 20px; max-width: 480px; margin: 0 auto; border: 1px solid #333;">
+        <h2 style="color: #f43f5e; text-align: center; font-weight: bold; margin-bottom: 20px;">GhostChat Alert</h2>
+        <p style="font-size: 14px; color: #ccc; line-height: 1.6;">${text}</p>
+        <p style="font-size: 11px; color: #666; text-align: center; margin-top: 30px; border-top: 1px solid #222; padding-top: 15px;">&copy; 2026 GhostChat Administration. All rights reserved.</p>
+      </div>
+    `
+  });
 }
 
 // ─── HTTP Endpoints ──────────────────────────────────────────────────────────
