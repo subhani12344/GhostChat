@@ -102,7 +102,7 @@ export default function AdminDashboardPage() {
   }, []);
 
   const setupLiveTelemetry = (accessToken: string) => {
-    const socketUrl = window.location.origin;
+    const socketUrl = process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:4000";
     const socket = io(`${socketUrl}/admin`, {
       auth: { token: accessToken },
       transports: ["websocket", "polling"]

@@ -88,7 +88,7 @@ export default function ContactInquiries({ token }: ContactInquiriesProps) {
     fetchInquiries();
 
     // Establish WebSocket Connection to /admin namespace
-    const socketUrl = window.location.origin;
+    const socketUrl = process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:4000";
     const socket = io(`${socketUrl}/admin`, {
       auth: { token },
       transports: ["websocket", "polling"]
