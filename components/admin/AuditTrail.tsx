@@ -37,10 +37,12 @@ export default function AuditTrail({ token }: AuditTrailProps) {
   const [search, setSearch] = useState("");
   const [actionFilter, setActionFilter] = useState("all");
 
+  const serverUrl = process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:4000";
+
   const fetchLogs = async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/admin/audit", {
+      const res = await fetch(`${serverUrl}/api/admin/audit`, {
         headers: {
           Authorization: `Bearer ${token}`
         }

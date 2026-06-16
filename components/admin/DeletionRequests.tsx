@@ -33,10 +33,12 @@ export default function DeletionRequests({ token }: DeletionRequestsProps) {
   const [actionLoading, setActionLoading] = useState(false);
   const [confirmDeleteUser, setConfirmDeleteUser] = useState<DeletionRequest | null>(null);
 
+  const serverUrl = process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:4000";
+
   const fetchRequests = async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/admin/deletion-requests", {
+      const res = await fetch(`${serverUrl}/api/admin/deletion-requests`, {
         headers: {
           Authorization: `Bearer ${token}`
         }
@@ -59,7 +61,7 @@ export default function DeletionRequests({ token }: DeletionRequestsProps) {
   const handleApprove = async (req: DeletionRequest) => {
     setActionLoading(true);
     try {
-      const res = await fetch(`/api/admin/deletion-requests/${req.id}/execute`, {
+      const res = await fetch(`${serverUrl}/api/admin/deletion-requests/${req.id}/execute`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -85,7 +87,7 @@ export default function DeletionRequests({ token }: DeletionRequestsProps) {
     if (!confirm("Are you sure you want to reject this data deletion request?")) return;
     try {
       // For now just change status in DB via mock/update request
-      const res = await fetch(`/api/admin/deletion-requests/${reqId}/status`, {
+      const res = await fetch(`${serverUrl}/api/admin/deletion-requests/${reqId}/status`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",

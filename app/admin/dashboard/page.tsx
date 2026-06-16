@@ -39,6 +39,8 @@ export default function AdminDashboardPage() {
   const [admin, setAdmin] = useState<any>(null);
   const [token, setToken] = useState("");
 
+  const serverUrl = process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:4000";
+
   // Metrics telemetry data
   const [metrics, setMetrics] = useState<Metrics>({
     totalUsers: 0,
@@ -55,7 +57,7 @@ export default function AdminDashboardPage() {
   const fetchMetrics = async (accessToken: string) => {
     setMetricsLoading(true);
     try {
-      const res = await fetch("/api/admin/analytics/metrics", {
+      const res = await fetch(`${serverUrl}/api/admin/analytics/metrics`, {
         headers: { Authorization: `Bearer ${accessToken}` }
       });
       if (res.ok) {
@@ -80,7 +82,7 @@ export default function AdminDashboardPage() {
       setToken(savedToken);
 
       try {
-        const res = await fetch("/api/admin/auth/me", {
+        const res = await fetch(`${serverUrl}/api/admin/auth/me`, {
           headers: { Authorization: `Bearer ${savedToken}` }
         });
         if (res.ok) {
@@ -141,7 +143,7 @@ export default function AdminDashboardPage() {
 
   const handleLogout = async () => {
     try {
-      await fetch("/api/admin/auth/logout", {
+      await fetch(`${serverUrl}/api/admin/auth/logout`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` }
       });

@@ -46,10 +46,12 @@ export default function ContactInquiries({ token }: ContactInquiriesProps) {
   const [sending, setSending] = useState(false);
   const socketRef = useRef<Socket | null>(null);
 
+  const serverUrl = process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:4000";
+
   const fetchInquiries = async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/admin/contacts", {
+      const res = await fetch(`${serverUrl}/api/admin/contacts`, {
         headers: {
           Authorization: `Bearer ${token}`
         }
@@ -67,7 +69,7 @@ export default function ContactInquiries({ token }: ContactInquiriesProps) {
 
   const fetchInquiryDetails = async (id: string | number) => {
     try {
-      const res = await fetch(`/api/admin/contacts/${id}`, {
+      const res = await fetch(`${serverUrl}/api/admin/contacts/${id}`, {
         headers: {
           Authorization: `Bearer ${token}`
         }
@@ -88,8 +90,7 @@ export default function ContactInquiries({ token }: ContactInquiriesProps) {
     fetchInquiries();
 
     // Establish WebSocket Connection to /admin namespace
-    const socketUrl = process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:4000";
-    const socket = io(`${socketUrl}/admin`, {
+    const socket = io(`${serverUrl}/admin`, {
       auth: { token },
       transports: ["websocket", "polling"]
     });
@@ -137,7 +138,7 @@ export default function ContactInquiries({ token }: ContactInquiriesProps) {
     if (!selectedInquiry || !replyText.trim()) return;
     setSending(true);
     try {
-      const res = await fetch(`/api/admin/contacts/${selectedInquiry.id}/reply`, {
+      const res = await fetch(`${serverUrl}/api/admin/contacts/${selectedInquiry.id}/reply`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

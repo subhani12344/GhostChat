@@ -42,6 +42,8 @@ export default function UserManagement({ token }: UserManagementProps) {
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
 
+  const serverUrl = process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:4000";
+
   // Modal states
   const [selectedUser, setSelectedUser] = useState<PlatformUser | null>(null);
   const [showProfile, setShowProfile] = useState(false);
@@ -52,7 +54,7 @@ export default function UserManagement({ token }: UserManagementProps) {
   const fetchUsers = async () => {
     setLoading(true);
     try {
-      const url = `/api/admin/platform/users?search=${encodeURIComponent(search)}&status=${statusFilter}&offset=${offset}&limit=${limit}`;
+      const url = `${serverUrl}/api/admin/platform/users?search=${encodeURIComponent(search)}&status=${statusFilter}&offset=${offset}&limit=${limit}`;
       const res = await fetch(url, {
         headers: {
           Authorization: `Bearer ${token}`
@@ -78,7 +80,7 @@ export default function UserManagement({ token }: UserManagementProps) {
     setActionLoading(true);
     try {
       const username = selectedUser.username;
-      const res = await fetch(`/api/admin/platform/users/${username}/${action}`, {
+      const res = await fetch(`${serverUrl}/api/admin/platform/users/${username}/${action}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -108,7 +110,7 @@ export default function UserManagement({ token }: UserManagementProps) {
     setActionLoading(true);
     try {
       const username = selectedUser.username;
-      const res = await fetch(`/api/admin/platform/users/${username}`, {
+      const res = await fetch(`${serverUrl}/api/admin/platform/users/${username}`, {
         method: "DELETE",
         headers: {
           Authorization: `Bearer ${token}`
@@ -132,7 +134,7 @@ export default function UserManagement({ token }: UserManagementProps) {
 
   const handleUnban = async (user: PlatformUser) => {
     try {
-      const res = await fetch(`/api/admin/platform/users/${user.username}/unban`, {
+      const res = await fetch(`${serverUrl}/api/admin/platform/users/${user.username}/unban`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`
@@ -149,7 +151,7 @@ export default function UserManagement({ token }: UserManagementProps) {
 
   const handleUnsuspend = async (user: PlatformUser) => {
     try {
-      const res = await fetch(`/api/admin/platform/users/${user.username}/unsuspend`, {
+      const res = await fetch(`${serverUrl}/api/admin/platform/users/${user.username}/unsuspend`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`
@@ -167,7 +169,7 @@ export default function UserManagement({ token }: UserManagementProps) {
   const handleForceLogout = async (user: PlatformUser) => {
     if (!confirm(`Force logout all active sessions for ${user.username}?`)) return;
     try {
-      const res = await fetch(`/api/admin/platform/users/${user.username}/force-logout`, {
+      const res = await fetch(`${serverUrl}/api/admin/platform/users/${user.username}/force-logout`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`

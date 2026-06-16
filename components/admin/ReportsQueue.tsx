@@ -35,10 +35,12 @@ export default function ReportsQueue({ token }: ReportsQueueProps) {
   const [selectedReports, setSelectedReports] = useState<(string | number)[]>([]);
   const [actionLoading, setActionLoading] = useState(false);
 
+  const serverUrl = process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:4000";
+
   const fetchReports = async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/admin/reports", {
+      const res = await fetch(`${serverUrl}/api/admin/reports`, {
         headers: {
           Authorization: `Bearer ${token}`
         }
@@ -65,7 +67,7 @@ export default function ReportsQueue({ token }: ReportsQueueProps) {
 
   const handleResolve = async (id: string | number) => {
     try {
-      const res = await fetch(`/api/admin/reports/${id}/resolve`, {
+      const res = await fetch(`${serverUrl}/api/admin/reports/${id}/resolve`, {
         method: "PUT",
         headers: {
           Authorization: `Bearer ${token}`
@@ -84,7 +86,7 @@ export default function ReportsQueue({ token }: ReportsQueueProps) {
     setActionLoading(true);
     try {
       for (const id of selectedReports) {
-        await fetch(`/api/admin/reports/${id}/resolve`, {
+        await fetch(`${serverUrl}/api/admin/reports/${id}/resolve`, {
           method: "PUT",
           headers: {
             Authorization: `Bearer ${token}`

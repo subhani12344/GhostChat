@@ -29,10 +29,12 @@ export default function SystemHealth({ token }: SystemHealthProps) {
   const [health, setHealth] = useState<HealthData | null>(null);
   const [loading, setLoading] = useState(false);
 
+  const serverUrl = process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:4000";
+
   const fetchHealth = async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/admin/health", {
+      const res = await fetch(`${serverUrl}/api/admin/health`, {
         headers: {
           Authorization: `Bearer ${token}`
         }

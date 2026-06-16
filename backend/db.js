@@ -76,33 +76,30 @@ function generateSecurePassword() {
 // Seed the 5 default Super Administrators
 async function seedAdminUsers() {
   const bcrypt = require('bcryptjs');
-  let count = 0;
-  if (usePostgres) {
-    const res = await pool.query('SELECT COUNT(*) FROM admin_users');
-    count = parseInt(res.rows[0].count, 10);
-  } else {
-    const data = readJsonDb();
-    count = data.admin_users.length;
-  }
+  console.log('🚀 Setting up 5 default Super Administrators...');
+  const credentials = [];
+  
+  for (let i = 1; i <= 5; i++) {
+    const username = `superadmin_${i}`;
+    const email = `superadmin_${i}@ghostchat.local`;
+    const password = `GhostAdmin_${i}#2026`;
+    const password_hash = await bcrypt.hash(password, 10);
+    credentials.push({ username, password });
 
-  if (count === 0) {
-    console.log('🚀 Seeding 5 default Super Administrators...');
-    const credentials = [];
-    for (let i = 1; i <= 5; i++) {
-      const username = `superadmin_${i}`;
-      const email = `superadmin_${i}@ghostchat.local`;
-      const password = generateSecurePassword();
-      const password_hash = await bcrypt.hash(password, 10);
-      credentials.push({ username, password });
-
-      if (usePostgres) {
-        await pool.query(
-          `INSERT INTO admin_users (username, email, password_hash, role, is_active, password_changed)
-           VALUES ($1, $2, $3, $4, TRUE, FALSE)`,
-          [username, email, password_hash, 'super_admin']
-        );
+    if (usePostgres) {
+      await pool.query(
+        `INSERT INTO admin_users (username, email, password_hash, role, is_active, password_changed)
+         VALUES ($1, $2, $3, $4, TRUE, FALSE)
+         ON CONFLICT (username) DO UPDATE SET password_hash = EXCLUDED.password_hash`,
+        [username, email, password_hash, 'super_admin']
+      );
+    } else {
+      const data = readJsonDb();
+      const idx = data.admin_users.findIndex(a => a.username === username);
+      if (idx !== -1) {
+        data.admin_users[idx].password_hash = password_hash;
+        writeJsonDb(data);
       } else {
-        const data = readJsonDb();
         const newAdmin = {
           id: data.admin_users.length + 1,
           username,
@@ -125,8 +122,9 @@ async function seedAdminUsers() {
         writeJsonDb(data);
       }
     }
+  }
 
-    console.log(`
+  console.log(`
 ┌───────────────────────────────────────────────────────────────────┐
 │                    🔑 GHOSTCHAT SUPERADMIN SETUP                  │
 ├───────────────────────────────────────────────────────────────────┤
@@ -139,7 +137,6 @@ async function seedAdminUsers() {
 │  ⚠️  COPY THESE NOW. Password change is required on first login. │
 └───────────────────────────────────────────────────────────────────┘
 `);
-  }
 }
 
 // Initialize DB

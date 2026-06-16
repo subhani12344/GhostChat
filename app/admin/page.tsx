@@ -11,6 +11,8 @@ export default function AdminLoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  const serverUrl = process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:4000";
+
   // 2FA state variables
   const [requires2FA, setRequires2FA] = useState(false);
   const [tempToken, setTempToken] = useState("");
@@ -28,7 +30,7 @@ export default function AdminLoginPage() {
       const savedToken = localStorage.getItem("admin_token");
       if (savedToken) {
         try {
-          const res = await fetch("/api/admin/auth/me", {
+          const res = await fetch(`${serverUrl}/api/admin/auth/me`, {
             headers: { Authorization: `Bearer ${savedToken}` }
           });
           if (res.ok) {
@@ -49,7 +51,7 @@ export default function AdminLoginPage() {
     setError("");
 
     try {
-      const res = await fetch("/api/admin/auth/login", {
+      const res = await fetch(`${serverUrl}/api/admin/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password })
@@ -83,7 +85,7 @@ export default function AdminLoginPage() {
 
   const initiate2FASetup = async (accessToken: string) => {
     try {
-      const res = await fetch("/api/admin/auth/2fa/setup", {
+      const res = await fetch(`${serverUrl}/api/admin/auth/2fa/setup`, {
         method: "POST",
         headers: { Authorization: `Bearer ${accessToken}` }
       });
@@ -115,7 +117,7 @@ export default function AdminLoginPage() {
         payload.adminId = adminId;
       }
 
-      const res = await fetch("/api/admin/auth/2fa/verify", {
+      const res = await fetch(`${serverUrl}/api/admin/auth/2fa/verify`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
