@@ -29,6 +29,10 @@ function LoginContent() {
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
   
+  // Custom Premium Alert Modal States
+  const [showSocialModal, setShowSocialModal] = useState(false);
+  const [socialModalType, setSocialModalType] = useState<'Google' | 'GitHub' | ''>('');
+  
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState('');
@@ -329,7 +333,10 @@ function LoginContent() {
             <div className="grid grid-cols-2 gap-3">
               <button
                 type="button"
-                onClick={() => alert('Social authentication features are configured in Vercel settings.')}
+                onClick={() => {
+                  setSocialModalType('Google');
+                  setShowSocialModal(true);
+                }}
                 className="py-2.5 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 rounded-xl text-xs font-bold flex items-center justify-center space-x-2 transition-all cursor-pointer"
               >
                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
@@ -343,7 +350,10 @@ function LoginContent() {
               
               <button
                 type="button"
-                onClick={() => alert('Social authentication features are configured in Vercel settings.')}
+                onClick={() => {
+                  setSocialModalType('GitHub');
+                  setShowSocialModal(true);
+                }}
                 className="py-2.5 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 rounded-xl text-xs font-bold flex items-center justify-center space-x-2 transition-all cursor-pointer"
               >
                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
@@ -364,6 +374,42 @@ function LoginContent() {
 
         </div>
       </div>
+
+      {/* Premium Glassmorphic Modal for Social Authentication Info */}
+      {showSocialModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <div className="w-full max-w-sm bg-neutral-950/85 border border-white/10 rounded-2xl p-6 glass-dark shadow-2xl relative text-center animate-in zoom-in-95 duration-200 space-y-4">
+            
+            {/* Ambient Red/Rose Glow behind icon */}
+            <div className="mx-auto w-12 h-12 rounded-full bg-rose-500/10 border border-rose-500/30 flex items-center justify-center shadow-lg shadow-rose-950/40">
+              <Shield className="w-5 h-5 text-rose-500" />
+            </div>
+
+            {/* Content Details */}
+            <div className="space-y-2">
+              <h3 className="font-extrabold text-sm tracking-wider uppercase text-white font-sans">
+                {socialModalType} Authentication
+              </h3>
+              <p className="text-xs text-neutral-400 leading-relaxed font-sans px-2">
+                Social authentication integrations are pre-configured through Vercel. 
+                Please register or link your social providers within the system deployment control panel.
+              </p>
+            </div>
+
+            {/* Action Buttons */}
+            <button
+              onClick={() => {
+                setShowSocialModal(false);
+                setSocialModalType('');
+              }}
+              className="w-full py-3 bg-gradient-to-r from-rose-600 to-red-700 hover:from-rose-500 hover:to-red-600 active:scale-[0.98] transition-all text-xs font-bold uppercase tracking-wider rounded-xl cursor-pointer text-white shadow-md shadow-rose-950/30"
+            >
+              Understood
+            </button>
+
+          </div>
+        </div>
+      )}
     </div>
   );
 }
