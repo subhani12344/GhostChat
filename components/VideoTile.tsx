@@ -51,7 +51,7 @@ export default function VideoTile({
     }
   }, [toastMessage]);
 
-  const isGuest = partnerUsername ? partnerUsername.startsWith('Guest_') : true;
+  const isGuest = partnerUsername ? (partnerUsername.startsWith('Guest_') || partnerUsername.startsWith('Guest-')) : true;
 
   // Check if current user is logged in (and not a guest)
   const [currentUser, setCurrentUser] = useState<{ username: string } | null>(null);
@@ -66,7 +66,7 @@ export default function VideoTile({
     }
   }, [propCurrentUser]);
 
-  const isCurrentUserGuest = currentUser ? currentUser.username.startsWith('Guest_') : true;
+  const isCurrentUserGuest = currentUser ? (currentUser.username.startsWith('Guest_') || currentUser.username.startsWith('Guest-') || (currentUser as any).isAnonymous) : true;
   const showFollowButton = isConnected && partnerUsername;
 
   const fetchRelation = async () => {

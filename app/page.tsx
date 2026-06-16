@@ -45,7 +45,7 @@ export default function Home() {
     };
 
     fetchOnlineCount();
-    const intervalId = setInterval(fetchOnlineCount, 2000);
+    const intervalId = setInterval(fetchOnlineCount, 1000);
 
     return () => clearInterval(intervalId);
   }, [serverUrl]);

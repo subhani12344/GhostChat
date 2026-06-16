@@ -9,9 +9,15 @@ interface NotificationCenterProps {
   serverUrl: string;
   socket: Socket | null;
   currentUser: { username: string } | null;
+  onAuthTrigger?: () => void;
 }
 
-export default function NotificationCenter({ serverUrl, socket, currentUser }: NotificationCenterProps) {
+export default function NotificationCenter({
+  serverUrl,
+  socket,
+  currentUser,
+  onAuthTrigger
+}: NotificationCenterProps) {
   const router = useRouter();
   const [notifications, setNotifications] = useState<any[]>([]);
   const [open, setOpen] = useState(false);
@@ -19,8 +25,10 @@ export default function NotificationCenter({ serverUrl, socket, currentUser }: N
 
   const unreadCount = notifications.filter(n => n.status === 'unread').length;
 
+  const isGuest = currentUser?.username.startsWith('Guest_') || currentUser?.username.startsWith('Guest-') || (currentUser as any)?.isAnonymous;
+
   const fetchNotifications = async () => {
-    if (!currentUser || currentUser.username.startsWith('Guest_')) return;
+    if (!currentUser || isGuest) return;
     const token = localStorage.getItem('ghostchat_token');
     if (!token) return;
 
@@ -186,7 +194,21 @@ export default function NotificationCenter({ serverUrl, socket, currentUser }: N
     }
   };
 
-  if (!currentUser || currentUser.username.startsWith('Guest_')) return null;
+  if (!currentUser) return null;
+
+  if (isGuest) {
+    return (
+      <div className="relative">
+        <button
+          onClick={onAuthTrigger}
+          className="relative flex h-9 w-9 items-center justify-center rounded-full border border-brand-gray-mid/30 bg-white text-brand-black/45 hover:text-brand-black transition-all active:scale-95 cursor-pointer"
+          title="Sign in to view notifications"
+        >
+          <Bell size={16} />
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="relative" ref={dropdownRef}>

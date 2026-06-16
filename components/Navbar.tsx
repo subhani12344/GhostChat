@@ -63,6 +63,7 @@ export default function Navbar({
                   serverUrl={serverUrl}
                   socket={socket || null}
                   currentUser={user}
+                  onAuthTrigger={onAuthClick}
                 />
 
                 {/* Clickable Username Profile trigger */}
@@ -117,6 +118,7 @@ export default function Navbar({
         socket={socket || null}
         onLogout={onLogout}
         onProfileUpdate={onAuthSuccess}
+        onAuthTrigger={onAuthClick}
       />
     </>
   );

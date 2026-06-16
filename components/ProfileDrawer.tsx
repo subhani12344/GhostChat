@@ -13,6 +13,7 @@ interface ProfileDrawerProps {
   socket: Socket | null;
   onLogout: () => void;
   onProfileUpdate?: (u: { username: string }) => void;
+  onAuthTrigger?: () => void;
 }
 
 export default function ProfileDrawer({
@@ -22,7 +23,8 @@ export default function ProfileDrawer({
   serverUrl,
   socket,
   onLogout,
-  onProfileUpdate
+  onProfileUpdate,
+  onAuthTrigger
 }: ProfileDrawerProps) {
   const router = useRouter();
   const [profile, setProfile] = useState<any>(null);
@@ -55,7 +57,7 @@ export default function ProfileDrawer({
 
   // Fetch current user profile
   const fetchMyProfile = async () => {
-    if (!currentUser || currentUser.username.startsWith('Guest_')) return;
+    if (!currentUser || currentUser.username.startsWith('Guest_') || currentUser.username.startsWith('Guest-')) return;
     const token = localStorage.getItem('ghostchat_token');
     if (!token) return;
 
@@ -310,7 +312,7 @@ export default function ProfileDrawer({
 
   if (!isOpen) return null;
   if (!currentUser) return null;
-  const isGuest = currentUser.username.startsWith('Guest_');
+  const isGuest = currentUser.username.startsWith('Guest_') || currentUser.username.startsWith('Guest-') || (currentUser as any).isAnonymous;
 
   // Filtered List based on search query
   const filteredList = listData.filter(
@@ -464,6 +466,18 @@ export default function ProfileDrawer({
                   <p className="text-xs text-brand-black/55 max-w-xs leading-relaxed">
                     You are connected securely as a guest user. Register or log in to create a persistent profile, add nickname/bio, and access follow states.
                   </p>
+                  {onAuthTrigger && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onClose();
+                        onAuthTrigger();
+                      }}
+                      className="mt-4 rounded-xl bg-brand-black px-6 py-2.5 text-xs font-bold uppercase tracking-wider text-white transition-all hover:bg-brand-black/90 active:scale-95 cursor-pointer font-bold"
+                    >
+                      Sign Up / Log In
+                    </button>
+                  )}
                 </div>
               </div>
             ) : !profile ? (

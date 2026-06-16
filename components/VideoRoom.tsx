@@ -10,6 +10,7 @@ import ReportModal from './ReportModal';
 import TermsModal from './TermsModal';
 import PeerProfileCard from './PeerProfileCard';
 import AuthModal from './AuthModal';
+import Navbar from './Navbar';
 import { Video, MessageSquare, Volume2, VideoOff, MicOff, RefreshCw, Square, ShieldAlert, UserCheck, PhoneCall } from 'lucide-react';
 
 interface Message {
@@ -40,6 +41,7 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [showMobileChat, setShowMobileChat] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
+  const [onlineCount, setOnlineCount] = useState(0);
 
   useEffect(() => {
     const accepted = localStorage.getItem('ghostchat_terms_accepted') === 'true';
@@ -205,9 +207,13 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
     });
 
     socket.on('connect_error', () => {
-      console.warn('⚠️ Server connection failed. Activating Offline Sandbox Simulator...');
-      setIsOfflineSim(true);
-      appendSystemMessage('Offline Sandbox Simulator enabled.');
+      setIsOfflineSim(false);
+      setIsMatching(false);
+      appendSystemMessage('Unable to reach the GhostChat server. Please try again in a moment.');
+    });
+
+    socket.on('online_count', (count: number) => {
+      setOnlineCount(count);
     });
 
     socket.on('waiting', () => {
@@ -388,9 +394,22 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
     router.push(`/chat?room=${targetRoom}&mode=video`);
   };
 
-  const handleAuthSuccess = (user: { username: string; token: string }) => {
+  const handleAuthSuccess = (user: { username: string; token?: string }) => {
     setUsername(user.username);
-    setCurrentUser({ username: user.username });
+    const stored = localStorage.getItem('ghostchat_user');
+    if (stored) {
+      setCurrentUser(JSON.parse(stored));
+    } else {
+      setCurrentUser({ username: user.username });
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('ghostchat_token');
+    localStorage.removeItem('ghostchat_user');
+    setCurrentUser(null);
+    setUsername('');
+    router.push('/');
   };
 
   const handleBackToHome = () => {
@@ -588,17 +607,29 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
   return (
     <div
       style={{ height: viewportHeight }}
-      className={`flex w-full flex-col overflow-hidden bg-brand-gray-light ${
-        chatMode === 'video' ? 'p-0 lg:p-6' : 'p-3 md:p-6'
-      }`}
+      className="flex w-full flex-col overflow-hidden bg-brand-gray-light"
     >
+      <Navbar
+        onlineCount={onlineCount}
+        user={currentUser}
+        onAuthClick={() => setAuthOpen(true)}
+        onLogout={handleLogout}
+        onAuthSuccess={handleAuthSuccess}
+        socket={socketRef.current}
+      />
+
       <div
-        className={`mx-auto flex h-full w-full max-w-7xl ${
-          chatMode === 'video'
-            ? 'flex-col lg:flex-row gap-0 lg:gap-6 relative'
-            : 'flex-col lg:flex-row gap-4'
+        className={`flex-grow min-h-0 mx-auto w-full max-w-7xl ${
+          chatMode === 'video' ? 'p-0 lg:p-6' : 'p-3 md:p-6'
         }`}
       >
+        <div
+          className={`flex h-full w-full ${
+            chatMode === 'video'
+              ? 'flex-col lg:flex-row gap-0 lg:gap-6 relative'
+              : 'flex-col lg:flex-row gap-4'
+          }`}
+        >
         
         {/* LEFT COLUMN: Controls + Video Area */}
         <div
@@ -810,6 +841,7 @@ export default function VideoRoom({ serverUrl, chatMode }: VideoRoomProps) {
           </div>
         )}
       </div>
+    </div>
 
       {/* Report Abuse Overlay */}
       <ReportModal

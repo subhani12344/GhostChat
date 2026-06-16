@@ -807,8 +807,8 @@ function pairUsers(socketIdA, socketIdB) {
   userB.partner = socketIdA;
 
   // A is initiator (makes offer)
-  userA.socket.emit('matched', { initiator: true, partnerId: socketIdB });
-  userB.socket.emit('matched', { initiator: false, partnerId: socketIdA });
+  userA.socket.emit('matched', { initiator: true, partnerId: socketIdB, partnerUsername: userB.username });
+  userB.socket.emit('matched', { initiator: false, partnerId: socketIdA, partnerUsername: userA.username });
 
   console.log(`✅ Paired: ${userA.username || socketIdA} ↔ ${userB.username || socketIdB}`);
 }
