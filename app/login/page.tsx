@@ -64,6 +64,7 @@ function LoginContent() {
   const githubClientId = process.env.NEXT_PUBLIC_GITHUB_CLIENT_ID || '';
 
   const handleGoogleLogin = () => {
+    console.log("GOOGLE CLIENT ID =", googleClientId);
     if (!googleClientId) {
       setSocialModalType('Google');
       setShowSocialModal(true);

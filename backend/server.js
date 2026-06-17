@@ -329,6 +329,11 @@ app.post('/api/auth/oauth/callback', async (req, res) => {
       }
 
       // Exchange code for tokens
+      console.log("===== GOOGLE OAUTH DEBUG =====");
+console.log("clientId:", clientId);
+console.log("clientSecret:", clientSecret);
+console.log("callbackUrl:", callbackUrl);
+console.log("==============================");
       const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
