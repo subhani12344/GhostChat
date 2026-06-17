@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Bell, Check, X, UserCheck, Heart, Video, PhoneCall } from 'lucide-react';
+import { Bell, Check, X, UserCheck, Heart, Video, PhoneCall, AlertTriangle, Ban, AlertCircle, Sparkles } from 'lucide-react';
 import { Socket } from 'socket.io-client';
 import { useRouter } from 'next/navigation';
 
@@ -9,9 +9,15 @@ interface NotificationCenterProps {
   serverUrl: string;
   socket: Socket | null;
   currentUser: { username: string } | null;
+  onAuthTrigger?: () => void;
 }
 
-export default function NotificationCenter({ serverUrl, socket, currentUser }: NotificationCenterProps) {
+export default function NotificationCenter({
+  serverUrl,
+  socket,
+  currentUser,
+  onAuthTrigger
+}: NotificationCenterProps) {
   const router = useRouter();
   const [notifications, setNotifications] = useState<any[]>([]);
   const [open, setOpen] = useState(false);
@@ -19,8 +25,10 @@ export default function NotificationCenter({ serverUrl, socket, currentUser }: N
 
   const unreadCount = notifications.filter(n => n.status === 'unread').length;
 
+  const isGuest = currentUser?.username.startsWith('Guest_') || currentUser?.username.startsWith('Guest-') || (currentUser as any)?.isAnonymous;
+
   const fetchNotifications = async () => {
-    if (!currentUser || currentUser.username.startsWith('Guest_')) return;
+    if (!currentUser || isGuest) return;
     const token = localStorage.getItem('ghostchat_token');
     if (!token) return;
 
@@ -186,7 +194,21 @@ export default function NotificationCenter({ serverUrl, socket, currentUser }: N
     }
   };
 
-  if (!currentUser || currentUser.username.startsWith('Guest_')) return null;
+  if (!currentUser) return null;
+
+  if (isGuest) {
+    return (
+      <div className="relative">
+        <button
+          onClick={onAuthTrigger}
+          className="relative flex h-9 w-9 items-center justify-center rounded-full border border-brand-gray-mid/30 bg-white text-brand-black/45 hover:text-brand-black transition-all active:scale-95 cursor-pointer"
+          title="Sign in to view notifications"
+        >
+          <Bell size={16} />
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="relative" ref={dropdownRef}>
@@ -205,7 +227,7 @@ export default function NotificationCenter({ serverUrl, socket, currentUser }: N
 
       {/* Dropdown Panel */}
       {open && (
-        <div className="absolute right-0 mt-2.5 w-80 rounded-2xl border border-brand-gray-mid/45 bg-white py-3 shadow-2xl z-50 animate-in fade-in slide-in-from-top-3 duration-200">
+        <div className="absolute right-0 mt-2.5 w-80 rounded-2xl border border-brand-gray-mid/45 bg-white py-3 shadow-2xl z-[200] animate-in fade-in slide-in-from-top-3 duration-200">
           <div className="flex items-center justify-between border-b border-brand-gray-mid/30 px-4 pb-2 mb-2">
             <span className="text-xs font-bold uppercase tracking-wider text-brand-black">Notifications</span>
             {unreadCount > 0 && (
@@ -246,15 +268,41 @@ export default function NotificationCenter({ serverUrl, socket, currentUser }: N
                         <PhoneCall size={14} />
                       </div>
                     )}
+                    {notif.type === 'report_warning' && (
+                      <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-50 border border-amber-100 text-amber-600">
+                        <AlertTriangle size={14} />
+                      </div>
+                    )}
+                    {notif.type === 'suspension' && (
+                      <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-red-50 border border-red-100 text-red-600">
+                        <Ban size={14} />
+                      </div>
+                    )}
+                    {notif.type === 'suspension_lifted' && (
+                      <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-50 border border-emerald-100 text-emerald-600">
+                        <Sparkles size={14} />
+                      </div>
+                    )}
+                    {notif.type === 'report_confirmed' && (
+                      <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-50 border border-blue-100 text-blue-600">
+                        <AlertCircle size={14} />
+                      </div>
+                    )}
                   </div>
 
                   {/* Body */}
                   <div className="flex-1 min-w-0">
                     <p className="text-xs text-brand-black leading-snug">
-                      <strong className="font-extrabold">@{notif.sender_username}</strong>{' '}
-                      {notif.type === 'follow_request' && 'requested to follow you.'}
-                      {notif.type === 'follow_accept' && 'accepted your follow request.'}
-                      {notif.type === 'invite' && 'invited you to join a private room.'}
+                      {notif.sender_username === 'system' ? (
+                        <span>{notif.details}</span>
+                      ) : (
+                        <>
+                          <strong className="font-extrabold">@{notif.sender_username}</strong>{' '}
+                          {notif.type === 'follow_request' && 'requested to follow you.'}
+                          {notif.type === 'follow_accept' && 'accepted your follow request.'}
+                          {notif.type === 'invite' && 'invited you to join a private room.'}
+                        </>
+                      )}
                     </p>
 
                     {/* Action buttons */}
@@ -292,7 +340,11 @@ export default function NotificationCenter({ serverUrl, socket, currentUser }: N
                       </div>
                     )}
 
-                    {notif.type === 'follow_accept' && (
+                    {(notif.type === 'follow_accept' || 
+                      notif.type === 'report_warning' || 
+                      notif.type === 'suspension' || 
+                      notif.type === 'suspension_lifted' || 
+                      notif.type === 'report_confirmed') && (
                       <button
                         onClick={() => handleDeleteNotif(notif.id)}
                         className="text-[10px] text-brand-black/40 hover:text-brand-black transition-colors mt-1 font-bold underline"

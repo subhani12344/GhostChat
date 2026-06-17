@@ -4,6 +4,58 @@ import React, { useState } from 'react';
 import { Shield, Video, MessageSquare, X, Sparkles } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
+const mockFingerprint = () => {
+  if (typeof window === 'undefined') return 'mock-fp';
+  try {
+    let canvas = document.createElement('canvas');
+    let ctx = canvas.getContext('2d');
+    let txt = 'ghostchat-device-fingerprint';
+    if (ctx) {
+      ctx.textBaseline = "top";
+      ctx.font = "14px 'Arial'";
+      ctx.textBaseline = "alphabetic";
+      ctx.fillStyle = "#f60";
+      ctx.fillRect(125,1,62,20);
+      ctx.fillStyle = "#069";
+      ctx.fillText(txt, 2,15);
+      ctx.fillStyle = "rgba(102, 204, 0, 0.7)";
+      ctx.fillText(txt, 4,17);
+    }
+    return canvas.toDataURL();
+  } catch (e) {
+    return 'mock-fp-fallback';
+  }
+};
+
+const getFingerprint = (): Promise<string> => {
+  return new Promise((resolve) => {
+    if (typeof window === 'undefined') {
+      resolve('server-side');
+      return;
+    }
+    if ((window as any).FingerprintJS) {
+      (window as any).FingerprintJS.load()
+        .then((fp: any) => fp.get())
+        .then((result: any) => resolve(result.visitorId))
+        .catch(() => resolve(mockFingerprint()));
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js';
+    script.async = true;
+    script.onload = () => {
+      (window as any).FingerprintJS.load()
+        .then((fp: any) => fp.get())
+        .then((result: any) => resolve(result.visitorId))
+        .catch(() => resolve(mockFingerprint()));
+    };
+    script.onerror = () => {
+      resolve(mockFingerprint());
+    };
+    document.head.appendChild(script);
+  });
+};
+
 interface AnonymousModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -23,12 +75,18 @@ export default function AnonymousModal({ isOpen, onClose, onSuccess, serverUrl }
     setError(null);
 
     try {
-      const response = await fetch(`${serverUrl}/api/auth/anonymous`, {
+      const fingerprint = await getFingerprint();
+      const response = await fetch(`${serverUrl}/api/anonymous/assign`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fingerprint })
       });
 
       if (!response.ok) {
+        if (response.status === 403) {
+          const errData = await response.json().catch(() => ({}));
+          throw new Error(errData.message || 'This device or IP has been suspended due to abuse.');
+        }
         throw new Error('Failed to secure anonymous session');
       }
 
@@ -48,11 +106,36 @@ export default function AnonymousModal({ isOpen, onClose, onSuccess, serverUrl }
       router.push(`/chat?mode=${mode}`);
     } catch (err: any) {
       console.error('Anonymous registration failure:', err);
-      setError('Connection failed. Please check your network or try again.');
+      setError(err.message || 'Connection failed. Please check your network or try again.');
     } finally {
       setLoadingMode(null);
     }
   };
+
+  React.useEffect(() => {
+    const handleUnload = () => {
+      const token = localStorage.getItem('ghostchat_token');
+      const userStr = localStorage.getItem('ghostchat_user');
+      if (token && userStr) {
+        const user = JSON.parse(userStr);
+        if (user.isAnonymous) {
+          // Send release request
+          fetch(`${serverUrl}/api/anonymous/release`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`
+            },
+            keepalive: true // keep request alive even after page closes
+          }).catch(() => {});
+        }
+      }
+    };
+
+    window.addEventListener('beforeunload', handleUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleUnload);
+    };
+  }, [serverUrl]);
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4 backdrop-blur-md animate-in fade-in duration-200">

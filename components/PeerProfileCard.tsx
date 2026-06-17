@@ -3,15 +3,17 @@
 import React, { useState, useEffect } from 'react';
 import { UserPlus, UserCheck, ShieldAlert, X, Heart } from 'lucide-react';
 import { Socket } from 'socket.io-client';
+import { useProfileSync } from '../hooks/useProfileSync';
 
 interface PeerProfileCardProps {
   partnerUsername: string;
   serverUrl: string;
   socket: Socket | null;
   onClose?: () => void;
+  onAuthTrigger?: () => void;
 }
 
-export default function PeerProfileCard({ partnerUsername, serverUrl, socket, onClose }: PeerProfileCardProps) {
+export default function PeerProfileCard({ partnerUsername, serverUrl, socket, onClose, onAuthTrigger }: PeerProfileCardProps) {
   const [profile, setProfile] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
@@ -66,9 +68,36 @@ export default function PeerProfileCard({ partnerUsername, serverUrl, socket, on
     };
   }, [socket]);
 
+  useProfileSync(
+    socket,
+    () => {},
+    (data) => {
+      if (data.username === partnerUsername) {
+        setProfile((prev: any) => prev ? { ...prev, ...data } : prev);
+      }
+    }
+  );
+
   const handleFollowAction = async () => {
     if (!profile || actionLoading) return;
     setActionLoading(true);
+
+    const storedUser = localStorage.getItem('ghostchat_user');
+    let isCurrentUserGuest = true;
+    if (storedUser) {
+      try {
+        const parsed = JSON.parse(storedUser);
+        isCurrentUserGuest = parsed.username.startsWith('Guest_') || parsed.username.startsWith('Guest-') || parsed.isAnonymous;
+      } catch (e) {}
+    }
+
+    if (isCurrentUserGuest) {
+      setActionLoading(false);
+      if (onAuthTrigger) {
+        onAuthTrigger();
+      }
+      return;
+    }
 
     const token = localStorage.getItem('ghostchat_token');
     if (!token) {
@@ -130,7 +159,7 @@ export default function PeerProfileCard({ partnerUsername, serverUrl, socket, on
 
   if (!profile) return null;
 
-  const isGuest = partnerUsername.startsWith('Guest_');
+  const isGuest = partnerUsername.startsWith('Guest_') || partnerUsername.startsWith('Guest-');
 
   return (
     <div className="relative flex h-full w-72 flex-col bg-white border-l border-brand-gray-mid/30 p-6 shadow-2xl animate-in slide-in-from-right duration-200 overflow-y-auto">

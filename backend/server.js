@@ -10,8 +10,82 @@ require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 const { db, initDb } = require('./db');
 
+// Base32 Decode for TOTP
+function base32Decode(str) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  const clean = str.replace(/=+$/, '').toUpperCase();
+  let bits = '';
+  for (let i = 0; i < clean.length; i++) {
+    const val = alphabet.indexOf(clean[i]);
+    if (val === -1) throw new Error('Invalid base32 character');
+    bits += val.toString(2).padStart(5, '0');
+  }
+  const buffer = [];
+  for (let i = 0; i + 8 <= bits.length; i += 8) {
+    buffer.push(parseInt(bits.substr(i, 8), 2));
+  }
+  return Buffer.from(buffer);
+}
+
+// Generate TOTP code dynamically via HMAC-SHA1
+function generateTOTP(secret, time = Date.now()) {
+  const crypto = require('crypto');
+  const key = base32Decode(secret);
+  const epoch = Math.floor(time / 1000);
+  const counter = Math.floor(epoch / 30);
+  const buffer = Buffer.alloc(8);
+  buffer.writeUInt32BE(Math.floor(counter / 0x100000000), 0);
+  buffer.writeUInt32BE(counter % 0x100000000, 4);
+  const hmac = crypto.createHmac('sha1', key);
+  hmac.update(buffer);
+  const hash = hmac.digest();
+  const offset = hash[hash.length - 1] & 0xf;
+  const binary = ((hash[offset] & 0x7f) << 24) |
+                 ((hash[offset + 1] & 0xff) << 16) |
+                 ((hash[offset + 2] & 0xff) << 8) |
+                 (hash[offset + 3] & 0xff);
+  const otp = binary % 1000000;
+  return String(otp).padStart(6, '0');
+}
+
+// Validate TOTP code with time step tolerance window of 30 seconds
+function verifyTOTP(secret, code) {
+  const time = Date.now();
+  for (let i = -1; i <= 1; i++) {
+    if (generateTOTP(secret, time + i * 30 * 1000) === code) {
+      return true;
+    }
+  }
+  return false;
+}
+
+const ALLOWED_ORIGINS = [
+  'http://localhost:3000',
+  'http://localhost:3001',
+  'https://ghost-chat-taupe.vercel.app',
+  'https://ghostchat.vercel.app',
+  // Allow all vercel.app preview URLs:
+  /\.vercel\.app$/,
+  // Allow all render.com URLs:
+  /\.onrender\.com$/
+];
+
 const app = express();
-app.use(cors({ origin: '*' }));
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true); // allow server-to-server
+    if (
+      ALLOWED_ORIGINS.some(o =>
+        typeof o === 'string' ? o === origin : o.test(origin)
+      )
+    ) {
+      return callback(null, true);
+    }
+    // Fall-through: allow all for now (remove in paid tier)
+    return callback(null, true);
+  },
+  credentials: true
+}));
 app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ limit: '15mb', extended: true }));
 
@@ -21,7 +95,10 @@ const io = new Server(server, {
   cors: {
     origin: '*',
     methods: ['GET', 'POST']
-  }
+  },
+  transports: ['websocket', 'polling'],
+  pingTimeout: 60000,
+  pingInterval: 25000
 });
 
 const JWT_SECRET = process.env.JWT_SECRET || 'ghostchat_secure_secret_key';
@@ -51,6 +128,133 @@ if (process.env.SMTP_SERVICE) {
   });
 }
 
+// Unified dispatchEmail helper supporting Resend, Postmark, Mailgun APIs, with SMTP and Console fallbacks
+async function dispatchEmail({ to, subject, text, html }) {
+  const emailFrom = process.env.EMAIL_FROM || process.env.SMTP_USER || 'GhostChat <no-reply@ghostchat.com>';
+
+  // 1. Resend API Integration
+  if (process.env.RESEND_API_KEY) {
+    try {
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          from: emailFrom,
+          to: [to],
+          subject: subject,
+          text: text,
+          html: html || `<p>${text}</p>`
+        })
+      });
+      const data = await response.json();
+      if (response.ok) {
+        console.log(`✉️ [Resend] Email successfully sent to ${to}. Message ID: ${data.id}`);
+        return true;
+      } else {
+        throw new Error(data.message || JSON.stringify(data));
+      }
+    } catch (err) {
+      console.error('❌ [Resend] Failed to dispatch email:', err.message);
+    }
+  }
+
+  // 2. Postmark API Integration
+  if (process.env.POSTMARK_SERVER_TOKEN) {
+    try {
+      const response = await fetch('https://api.postmarkapp.com/email', {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+          'X-Postmark-Server-Token': process.env.POSTMARK_SERVER_TOKEN
+        },
+        body: JSON.stringify({
+          From: emailFrom,
+          To: to,
+          Subject: subject,
+          TextBody: text,
+          HtmlBody: html || `<p>${text}</p>`
+        })
+      });
+      const data = await response.json();
+      if (response.ok) {
+        console.log(`✉️ [Postmark] Email successfully sent to ${to}. Message ID: ${data.MessageID}`);
+        return true;
+      } else {
+        throw new Error(data.Message || JSON.stringify(data));
+      }
+    } catch (err) {
+      console.error('❌ [Postmark] Failed to dispatch email:', err.message);
+    }
+  }
+
+  // 3. Mailgun API Integration
+  if (process.env.MAILGUN_API_KEY && process.env.MAILGUN_DOMAIN) {
+    try {
+      const domain = process.env.MAILGUN_DOMAIN;
+      const apiKey = process.env.MAILGUN_API_KEY;
+      const auth = Buffer.from(`api:${apiKey}`).toString('base64');
+      const form = new URLSearchParams();
+      form.append('from', emailFrom);
+      form.append('to', to);
+      form.append('subject', subject);
+      form.append('text', text);
+      if (html) form.append('html', html);
+
+      const response = await fetch(`https://api.mailgun.net/v3/${domain}/messages`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Basic ${auth}`,
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        body: form.toString()
+      });
+      const data = await response.json();
+      if (response.ok) {
+        console.log(`✉️ [Mailgun] Email successfully sent to ${to}. Message: ${data.message}`);
+        return true;
+      } else {
+        throw new Error(data.message || JSON.stringify(data));
+      }
+    } catch (err) {
+      console.error('❌ [Mailgun] Failed to dispatch email:', err.message);
+    }
+  }
+
+  // 4. Nodemailer SMTP Fallback
+  if (transporter) {
+    try {
+      await transporter.sendMail({
+        from: emailFrom,
+        to,
+        subject,
+        text,
+        html: html || `<p>${text}</p>`
+      });
+      console.log(`✉️ [SMTP] Email successfully sent to ${to}`);
+      return true;
+    } catch (err) {
+      console.error('❌ [SMTP] Failed to send email via SMTP:', err.message);
+    }
+  }
+
+  // 5. Console Logging Fallback (Local Development)
+  console.log(`
+┌────────────────────────────────────────────────────────┐
+│                                                        │
+│   📧 [CONSOLE FALLBACK] GHOSTCHAT EMAIL NOTIFICATION  │
+│   👉 TO: ${to.toUpperCase()}                           │
+│   👉 SUBJECT: ${subject}                               │
+│   👉 BODY: ${text.substring(0, Math.min(text.length, 120))}...                 │
+│                                                        │
+└────────────────────────────────────────────────────────┘
+  `);
+  return false;
+}
+
 // Helper: send OTP
 async function sendOtpEmail(email, code) {
   const messageText = `Your GhostChat verification code is: ${code}. This code expires in 2 minutes.`;
@@ -62,55 +266,188 @@ async function sendOtpEmail(email, code) {
 │   📧 GHOSTCHAT OTP CODE FOR ${email.toUpperCase()}    │
 │   👉 CODE:  ${code}                                    │
 │   ⏱️  EXPIRES IN: 2 MINUTES                            │
+│   ⚠️  (Fallback code printed in Node console logs)      │
 │                                                        │
 └────────────────────────────────────────────────────────┘
   `);
 
-  if (transporter) {
-    try {
-      await transporter.sendMail({
-        from: `"GhostChat Security" <${process.env.SMTP_USER}>`,
-        to: email,
-        subject: 'GhostChat Account Verification Code',
-        text: messageText,
-        html: `<p>${messageText}</p>`
-      });
-      console.log(`✉️ Email OTP sent to ${email}`);
-    } catch (err) {
-      console.error('Failed to send SMTP email, using console logging fallback:', err.message);
-    }
-  }
+  await dispatchEmail({
+    to: email,
+    subject: 'GhostChat Account Verification Code',
+    text: messageText,
+    html: `
+      <div style="font-family: sans-serif; background-color: #060606; color: #ffffff; padding: 30px; border-radius: 20px; max-width: 480px; margin: 0 auto; border: 1px solid #333;">
+        <h2 style="color: #f43f5e; text-align: center; font-weight: bold; margin-bottom: 20px;">GhostChat Verification</h2>
+        <p style="font-size: 14px; color: #ccc; text-align: center;">Your verification OTP code is:</p>
+        <div style="background-color: #1a1a1a; padding: 15px; border-radius: 10px; font-size: 28px; font-weight: bold; text-align: center; letter-spacing: 5px; color: #ffffff; margin: 20px 0; border: 1px solid #444;">
+          ${code}
+        </div>
+        <p style="font-size: 12px; color: #888; text-align: center; margin-top: 20px;">This code is valid for 2 minutes. If you did not request this, you can safely ignore this email.</p>
+      </div>
+    `
+  });
 }
 
 // Generic Helper: Send email notifications
 async function sendEmail(to, subject, text) {
-  if (transporter) {
-    try {
-      await transporter.sendMail({
-        from: `"GhostChat Administration" <${process.env.SMTP_USER}>`,
-        to,
-        subject,
-        text
-      });
-      console.log(`✉️ Mail dispatched to: ${to}`);
-    } catch (err) {
-      console.error(`Failed to send email to ${to}:`, err.message);
-    }
-  } else {
-    console.log(`
-┌────────────────────────────────────────────────────────┐
-│                                                        │
-│   📧 GHOSTCHAT EMAIL NOTIFICATION                      │
-│   👉 TO: ${to.toUpperCase()}                           │
-│   👉 SUBJECT: ${subject}                               │
-│   👉 BODY: ${text.substring(0, Math.min(text.length, 60))}...                 │
-│                                                        │
-└────────────────────────────────────────────────────────┘
-    `);
-  }
+  await dispatchEmail({
+    to,
+    subject,
+    text,
+    html: `
+      <div style="font-family: sans-serif; background-color: #060606; color: #ffffff; padding: 30px; border-radius: 20px; max-width: 480px; margin: 0 auto; border: 1px solid #333;">
+        <h2 style="color: #f43f5e; text-align: center; font-weight: bold; margin-bottom: 20px;">GhostChat Alert</h2>
+        <p style="font-size: 14px; color: #ccc; line-height: 1.6;">${text}</p>
+        <p style="font-size: 11px; color: #666; text-align: center; margin-top: 30px; border-top: 1px solid #222; padding-top: 15px;">&copy; 2026 GhostChat Administration. All rights reserved.</p>
+      </div>
+    `
+  });
 }
 
-// ─── HTTP Endpoints ──────────────────────────────────────────────────────────
+// OAuth 2.0 Callback Authentication (Exchanges Code for Session token)
+app.post('/api/auth/oauth/callback', async (req, res) => {
+  const { code, provider } = req.body;
+  if (!code || !provider) {
+    return res.status(400).json({ message: 'Code and provider are required' });
+  }
+
+  try {
+    let email = '';
+    let username = '';
+    let displayName = '';
+
+    // Derives callbackUrl dynamically based on request origin to support both localhost and vercel domains
+    const origin = req.headers.origin || 'https://ghost-chat-taupe.vercel.app';
+    const callbackUrl = `${origin}/auth/callback`;
+
+    if (provider === 'google') {
+      const clientId = process.env.GOOGLE_CLIENT_ID;
+      const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+
+      if (!clientId || !clientSecret) {
+        return res.status(500).json({ message: 'Google OAuth is not configured on the backend server.' });
+      }
+
+      // Exchange code for tokens
+      const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          code,
+          client_id: clientId,
+          client_secret: clientSecret,
+          redirect_uri: callbackUrl,
+          grant_type: 'authorization_code'
+        }).toString()
+      });
+
+      const tokenData = await tokenRes.json();
+      if (!tokenRes.ok) {
+        throw new Error(tokenData.error_description || 'Failed to exchange Google OAuth code.');
+      }
+
+      // Fetch user info
+      const infoRes = await fetch(`https://www.googleapis.com/oauth2/v3/userinfo?access_token=${tokenData.access_token}`);
+      const infoData = await infoRes.json();
+      if (!infoRes.ok) {
+        throw new Error('Failed to fetch Google user profile.');
+      }
+
+      email = infoData.email;
+      displayName = infoData.name || infoData.given_name || 'Google User';
+      username = (email.split('@')[0] + '_google').toLowerCase().replace(/[^a-z0-9_]/g, '');
+    } 
+    else if (provider === 'github') {
+      const clientId = process.env.GITHUB_CLIENT_ID;
+      const clientSecret = process.env.GITHUB_CLIENT_SECRET;
+
+      if (!clientId || !clientSecret) {
+        return res.status(500).json({ message: 'GitHub OAuth is not configured on the backend server.' });
+      }
+
+      // Exchange code for token
+      const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({
+          client_id: clientId,
+          client_secret: clientSecret,
+          code,
+          redirect_uri: callbackUrl
+        })
+      });
+
+      const tokenData = await tokenRes.json();
+      if (!tokenRes.ok || tokenData.error) {
+        throw new Error(tokenData.error_description || 'Failed to exchange GitHub OAuth code.');
+      }
+
+      const accessToken = tokenData.access_token;
+
+      // Fetch GitHub profile info
+      const infoRes = await fetch('https://api.github.com/user', {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'User-Agent': 'GhostChat-OAuth-Client'
+        }
+      });
+      const infoData = await infoRes.json();
+      if (!infoRes.ok) {
+        throw new Error('Failed to fetch GitHub user profile.');
+      }
+
+      // Fetch GitHub emails if not public
+      let githubEmail = infoData.email;
+      if (!githubEmail) {
+        const emailsRes = await fetch('https://api.github.com/user/emails', {
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'User-Agent': 'GhostChat-OAuth-Client'
+          }
+        });
+        if (emailsRes.ok) {
+          const emails = await emailsRes.json();
+          const primary = emails.find(e => e.primary) || emails[0];
+          if (primary) githubEmail = primary.email;
+        }
+      }
+
+      email = githubEmail || `${infoData.login}@github.ghostchat.local`;
+      displayName = infoData.name || infoData.login;
+      username = (infoData.login + '_github').toLowerCase().replace(/[^a-z0-9_]/g, '');
+    } else {
+      return res.status(400).json({ message: 'Unsupported OAuth provider' });
+    }
+
+    // Authenticate or register user dynamically
+    let user = await db.getUserByEmail(email);
+    if (!user) {
+      // Create user
+      const randomPassword = require('crypto').randomBytes(16).toString('hex');
+      const hashedPassword = await bcrypt.hash(randomPassword, 10);
+      user = await db.createUser(username, email, hashedPassword, 'user');
+      await db.updateUserProfile(user.id, { display_name: displayName });
+      
+      // Emit to admin panel
+      emitToAdmins('user:registered', { id: user.id, username: user.username, email: user.email, role: user.role, created_at: user.created_at });
+    }
+
+    // Issue JWT session token
+    const token = jwt.sign(
+      { userId: user.id, username: user.username },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    res.json({ token, username: user.username });
+  } catch (err) {
+    console.error('OAuth callback execution error:', err);
+    res.status(500).json({ message: err.message || 'OAuth authentication sequence failed.' });
+  }
+});
 
 // Direct User Registration (No verification code, enforces email unique, checks strength)
 app.post('/api/auth/register', async (req, res) => {
@@ -145,6 +482,9 @@ app.post('/api/auth/register', async (req, res) => {
 
     // Create user directly
     const newUser = await db.createUser(username, email, hashedPassword, 'user');
+
+    // Emit to admin panel
+    emitToAdmins('user:registered', { id: newUser.id, username: newUser.username, email: newUser.email, role: newUser.role, created_at: newUser.created_at });
 
     // Create JWT Token
     const token = jwt.sign({ userId: newUser.id, username: newUser.username }, JWT_SECRET, { expiresIn: '7d' });
@@ -238,6 +578,9 @@ app.post('/api/auth/verify-otp', async (req, res) => {
     // Complete User Creation
     const newUser = await db.createUser(record.username, email, record.password, 'user');
 
+    // Emit to admin panel
+    emitToAdmins('user:registered', { id: newUser.id, username: newUser.username, email: newUser.email, role: newUser.role, created_at: newUser.created_at });
+
     // Clean up OTP record
     await db.deleteOtpVerification(email);
 
@@ -330,6 +673,179 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
+// Request Password Reset OTP
+app.post('/api/auth/forgot-password', async (req, res) => {
+  const { email } = req.body;
+  if (!email) {
+    return res.status(400).json({ message: 'Email address is required' });
+  }
+
+  try {
+    const user = await db.getUserByEmail(email);
+    if (!user) {
+      return res.status(400).json({ message: 'Email address not registered to any account.' });
+    }
+
+    // Check lockout on password resets
+    const existingReset = await db.getPasswordReset(email);
+    if (existingReset && existingReset.locked_until) {
+      const lockDate = new Date(existingReset.locked_until);
+      if (lockDate > new Date()) {
+        const remainingHours = Math.ceil((lockDate - new Date()) / (1000 * 60 * 60));
+        return res.status(403).json({
+          message: `Too many failed attempts. Password recovery is locked. Try again after ${remainingHours} hours.`
+        });
+      }
+    }
+
+    // Generate random 6-digit OTP code
+    const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 2 * 60 * 1000); // 2 minutes expiry
+
+    // Save reset state in database
+    await db.createPasswordReset(email, otpCode, expiresAt);
+
+    // Dispatch OTP
+    await sendOtpEmail(email, otpCode);
+
+    res.json({ message: 'Verification code sent to email' });
+  } catch (err) {
+    console.error('Forgot password error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// Verify Password Reset OTP
+app.post('/api/auth/verify-reset-otp', async (req, res) => {
+  const { email, otp } = req.body;
+  if (!email || !otp) {
+    return res.status(400).json({ message: 'Email and OTP are required' });
+  }
+
+  try {
+    const record = await db.getPasswordReset(email);
+    if (!record) {
+      return res.status(400).json({ message: 'Verification record not found. Please try again.' });
+    }
+
+    // Check Lockout
+    if (record.locked_until && new Date(record.locked_until) > new Date()) {
+      return res.status(403).json({ message: 'Password recovery is locked. Try again later.' });
+    }
+
+    // Check Expiry
+    if (new Date(record.expires_at) < new Date()) {
+      return res.status(400).json({ message: 'Verification code has expired. Request a new code.' });
+    }
+
+    // Check Code
+    if (record.otp_code !== otp.trim()) {
+      return res.status(400).json({ message: 'Invalid verification code.' });
+    }
+
+    // OTP verified successfully. Issue a temporary 15-minute reset token.
+    const resetToken = jwt.sign(
+      { email: record.email, purpose: 'password_reset' },
+      JWT_SECRET,
+      { expiresIn: '15m' }
+    );
+
+    res.json({ message: 'OTP verified successfully', resetToken });
+  } catch (err) {
+    console.error('Verify reset OTP error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// Resend Password Reset OTP
+app.post('/api/auth/resend-reset-otp', async (req, res) => {
+  const { email } = req.body;
+  if (!email) {
+    return res.status(400).json({ message: 'Email is required' });
+  }
+
+  try {
+    const record = await db.getPasswordReset(email);
+    if (!record) {
+      return res.status(400).json({ message: 'No active recovery session found. Submit your email again.' });
+    }
+
+    // Check Lockout
+    if (record.locked_until && new Date(record.locked_until) > new Date()) {
+      return res.status(403).json({ message: 'Password recovery is locked.' });
+    }
+
+    // Check resend limit (max 3 resends)
+    if (record.resend_count >= 3) {
+      const lockedUntil = new Date(Date.now() + 18 * 60 * 60 * 1000); // 18 hrs lockout
+      await db.updatePasswordReset(email, record.otp_code, new Date(record.expires_at), record.resend_count, lockedUntil);
+      return res.status(403).json({
+        message: 'Resend limit reached (3 times). Password recovery is locked. Try again in 18 hours.'
+      });
+    }
+
+    // Generate new OTP
+    const newOtp = Math.floor(100000 + Math.random() * 900000).toString();
+    const newExpiry = new Date(Date.now() + 2 * 60 * 1000); // 2 minutes
+    const newCount = record.resend_count + 1;
+
+    // Save
+    await db.updatePasswordReset(email, newOtp, newExpiry, newCount, null);
+
+    // Dispatch
+    await sendOtpEmail(email, newOtp);
+
+    res.json({ message: 'Verification code resent successfully', resend_count: newCount });
+  } catch (err) {
+    console.error('Resend reset OTP error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// Reset User Password
+app.post('/api/auth/reset-password', async (req, res) => {
+  const { resetToken, password } = req.body;
+  if (!resetToken || !password) {
+    return res.status(400).json({ message: 'Reset token and new password are required' });
+  }
+
+  try {
+    // Verify JWT
+    let decoded;
+    try {
+      decoded = jwt.verify(resetToken, JWT_SECRET);
+    } catch (e) {
+      return res.status(400).json({ message: 'Invalid or expired password reset session. Start over.' });
+    }
+
+    if (decoded.purpose !== 'password_reset') {
+      return res.status(400).json({ message: 'Invalid authorization token' });
+    }
+
+    const email = decoded.email;
+
+    // Password strength check
+    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]).{8,}$/;
+    if (!passwordRegex.test(password)) {
+      return res.status(400).json({
+        message: 'Password must be at least 8 characters, contain at least one capital letter, one lowercase letter, one number, and one symbol.'
+      });
+    }
+
+    // Hash & update
+    const hashedPassword = await bcrypt.hash(password, 10);
+    await db.updateUserPassword(email, hashedPassword);
+
+    // Clear reset OTP record
+    await db.deletePasswordReset(email);
+
+    res.json({ message: 'Password reset successfully' });
+  } catch (err) {
+    console.error('Password reset endpoint error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
 // Anonymous Guest Login
 app.post('/api/auth/anonymous', (req, res) => {
   try {
@@ -383,7 +899,15 @@ app.post('/api/feedback', async (req, res) => {
           'GhostChat Account Deletion Scheduled (30-day Hold)',
           `Hello ${user.username},\n\nWe received your request to delete your account. Your account has been put on a 30-day hold.\n\nYou can restore and return to your account at any time within the next 30 days simply by logging back in. If you do not log in within 30 days, your account and all associated data will be permanently deleted.`
         );
+
+        // Create deletion request record for Admin command centre
+        const delReq = await db.createDeletionRequest(user.id, user.username, message);
+        emitToAdmins('deletion:requested', delReq);
       }
+    } else {
+      // Create contact inquiry record for Admin command centre
+      const inq = await db.createContactInquiry(name || 'Anonymous', email, formattedType, message);
+      emitToAdmins('contact:new', inq);
     }
 
     res.status(201).json({ message: 'Feedback recorded successfully', feedback });
@@ -394,11 +918,18 @@ app.post('/api/feedback', async (req, res) => {
 });
 
 // Reports Submit (from public reports page or chat)
+// Reports Submit
 app.post('/api/reports', async (req, res) => {
-  const { reporter_username, reported_username, reason, details } = req.body;
-  const ip = req.ip || req.headers['x-forwarded-for'] || '127.0.0.1';
+  const { reporter_username, reported_username, reason, details, fingerprint } = req.body;
+  const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
 
   try {
+    // Check if anonymous reporter is already banned
+    const ipBanned = await db.isIpBanned(ip);
+    if (ipBanned) {
+      return res.status(403).json({ message: 'You are currently banned from this platform.' });
+    }
+
     const report = await db.createReport({
       reporter_ip: ip,
       reported_ip: ip,
@@ -408,44 +939,90 @@ app.post('/api/reports', async (req, res) => {
       details
     });
 
-    if (reported_username && reported_username !== 'Stranger') {
-      const user = await db.getUserByUsername(reported_username);
-      if (user && user.email) {
-        const reportCount = await db.getReportsCountForUser(reported_username);
+    // Notify admins about the new report
+    emitToAdmins('report:submitted', report);
 
-        if (reportCount >= 5) {
-          // BANNED AND DELETED ACCOUNT IMMEDIATELY
+    // Notify reporter
+    if (reporter_username && !reporter_username.startsWith('Guest') && !reporter_username.startsWith('Anonymous')) {
+      const reporterNotif = await db.createNotification(reporter_username, 'system', 'report_confirmed', `Your report about ${reported_username || 'a user'} has been received.`);
+      const reporterSocketId = onlineUsers.get(reporter_username);
+      if (reporterSocketId) {
+        io.to(reporterSocketId).emit('new_notification', reporterNotif);
+      }
+    }
+
+    if (reported_username && reported_username !== 'Stranger' && !reported_username.startsWith('Guest') && !reported_username.startsWith('Anonymous')) {
+      const user = await db.getUserByUsername(reported_username);
+      if (user) {
+        // Increment lifetime reports
+        const lifetimeReports = await db.incrementLifetimeReports(reported_username);
+
+        // Find the reported user's socket to notify them
+        const reportedSocketId = onlineUsers.get(reported_username);
+
+        if (lifetimeReports >= 15) {
+          // PERMANENT DELETE at 15 lifetime reports
           const banExpires = new Date();
-          banExpires.setFullYear(banExpires.getFullYear() + 99); // Permanent ban
-          await db.createBan(reported_username, `Banned due to receiving ${reportCount} reports of abuse.`, banExpires);
+          banExpires.setFullYear(banExpires.getFullYear() + 99);
+          await db.createBan(reported_username, `Permanently banned: ${lifetimeReports} total abuse reports.`, banExpires);
           await db.deleteUser(reported_username);
 
-          // Send termination email
-          await sendEmail(
-            user.email,
-            'GhostChat Account Permanently Banned and Deleted',
-            `Hello ${reported_username},\n\nYour GhostChat account has been permanently banned and deleted due to receiving 5 or more abuse reports. Your active socket connection has been closed.`
-          );
+          emitToAdmins('ban:applied', { username: reported_username, reason: `Permanently banned: ${lifetimeReports} total abuse reports.` });
 
-          // Disconnect active socket
-          for (const [socketId, socketUser] of users.entries()) {
-            if (socketUser.username === reported_username) {
-              socketUser.socket.emit('chat_message', { 
-                text: '🔴 You have been permanently banned due to receiving 5 or more reports.', 
-                from: 'system' 
-              });
-              socketUser.socket.disconnect(true);
-              console.log(`🔌 Disconnected banned user socket: ${reported_username}`);
-            }
+          if (reportedSocketId) {
+            io.to(reportedSocketId).emit('account_action', {
+              type: 'permanent_ban',
+              message: 'Your account has been permanently deleted due to repeated abuse violations (15+ reports).'
+            });
+            const sock = io.sockets.sockets.get(reportedSocketId);
+            if (sock) sock.disconnect(true);
           }
+          if (user.email) await sendEmail(user.email, 'GhostChat Account Permanently Deleted', `Hello ${reported_username},\n\nYour GhostChat account has been permanently deleted due to accumulating 15 or more abuse reports.`);
+        } else if (lifetimeReports >= 10 && lifetimeReports < 15) {
+          // Second 20-day suspension at 10 reports
+          const suspendUntil = new Date();
+          suspendUntil.setDate(suspendUntil.getDate() + 20);
+          await db.setUserSuspension(reported_username, suspendUntil);
+          const suspendNotif = await db.createNotification(reported_username, 'system', 'suspension', `Second suspension issued (${lifetimeReports} total reports). Account suspended for 20 days until ${suspendUntil.toLocaleDateString()}.`);
+          
+          emitToAdmins('ban:applied', { username: reported_username, reason: `Suspended 20 days (${lifetimeReports} total reports)`, duration: '20 days' });
+          
+          if (reportedSocketId) {
+            io.to(reportedSocketId).emit('new_notification', suspendNotif);
+            io.to(reportedSocketId).emit('account_action', { type: 'suspended', until: suspendUntil.toISOString(), message: `Your account has been suspended for 20 days due to repeated reports.` });
+          }
+          if (user.email) await sendEmail(user.email, 'GhostChat Account Suspended (20 days)', `Hello ${reported_username},\n\nYour account has been suspended for 20 days (${lifetimeReports} total reports). It will be restored on ${suspendUntil.toLocaleDateString()}.`);
+        } else if (lifetimeReports >= 5 && lifetimeReports < 10) {
+          // First 20-day suspension at 5 reports
+          const suspendUntil = new Date();
+          suspendUntil.setDate(suspendUntil.getDate() + 20);
+          await db.setUserSuspension(reported_username, suspendUntil);
+          const suspendNotif = await db.createNotification(reported_username, 'system', 'suspension', `Your account has been suspended for 20 days (${lifetimeReports} reports received). Suspended until ${suspendUntil.toLocaleDateString()}.`);
+          
+          emitToAdmins('ban:applied', { username: reported_username, reason: `Suspended 20 days (${lifetimeReports} total reports)`, duration: '20 days' });
+
+          if (reportedSocketId) {
+            io.to(reportedSocketId).emit('new_notification', suspendNotif);
+            io.to(reportedSocketId).emit('account_action', { type: 'suspended', until: suspendUntil.toISOString(), message: `Your account has been suspended for 20 days.` });
+          }
+          if (user.email) await sendEmail(user.email, 'GhostChat Account Suspended', `Hello ${reported_username},\n\nYour account has been suspended for 20 days due to ${lifetimeReports} abuse reports. You can return on ${suspendUntil.toLocaleDateString()}.`);
         } else {
-          // SEND WARNING EMAIL
-          await sendEmail(
-            user.email,
-            'GhostChat Account Abuse Warning',
-            `Hello ${reported_username},\n\nWarning: Your GhostChat account has been reported for: "${reason}". Details: ${details || 'No details provided'}.\n\nNote: If you receive 5 or more reports, your account will be permanently banned and deleted. Current reports: ${reportCount}/5.`
-          );
+          // Warning (< 5 reports)
+          const warnNotif = await db.createNotification(reported_username, 'system', 'report_warning', `Warning: You have received ${lifetimeReports} abuse report(s). Reason: ${reason}. Accumulating 5 reports will result in a 20-day suspension.`);
+          if (reportedSocketId) {
+            io.to(reportedSocketId).emit('new_notification', warnNotif);
+          }
+          if (user.email) await sendEmail(user.email, 'GhostChat Abuse Warning', `Hello ${reported_username},\n\nYou have received ${lifetimeReports}/5 abuse reports. Reason: ${reason}. 5 reports = 20-day suspension. 15 total = permanent ban.`);
         }
+      }
+    } else if (reported_username && (reported_username.startsWith('Guest') || reported_username.startsWith('Anonymous'))) {
+      // Anonymous user abuse: ban their IP and fingerprint
+      const banExpires = new Date();
+      banExpires.setDate(banExpires.getDate() + 20);
+      await db.createIpBan('ip', ip, `Anonymous abuse report: ${reason}`, banExpires);
+      emitToAdmins('ban:applied', { username: reported_username, reason: `Anonymous abuse report: ${reason} (IP Banned)` });
+      if (fingerprint) {
+        await db.createIpBan('fingerprint', fingerprint, `Anonymous abuse report: ${reason}`, banExpires);
       }
     }
 
@@ -536,6 +1113,10 @@ app.put('/api/profile', authenticateToken, async (req, res) => {
   const { nickname, bio, profile_img } = req.body;
   try {
     const updated = await db.updateUserProfile(req.user.username, nickname, bio, profile_img);
+
+    // Emit to admin panel
+    emitToAdmins('user:updated', { id: req.user.userId, username: req.user.username, nickname, bio, profile_img });
+
     res.json({
       message: 'Profile updated successfully',
       user: {
@@ -613,9 +1194,31 @@ app.post('/api/follow/accept', authenticateToken, async (req, res) => {
       io.to(targetSocketId).emit('follow_update');
     }
 
+    // Emit follow_back_prompt to the accepter so they see a "Follow Back?" popup
+    const accepterSocketId = onlineUsers.get(req.user.username);
+    if (accepterSocketId) {
+      io.to(accepterSocketId).emit('follow_back_prompt', { targetUsername });
+    }
+
     res.json({ message: 'Follow request accepted', relationship });
   } catch (err) {
     console.error('Accept follow error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Decline Follow Request
+app.post('/api/follow/decline', authenticateToken, async (req, res) => {
+  if (req.user.isAnonymous) {
+    return res.status(403).json({ message: 'Guests cannot perform follow actions' });
+  }
+  const { targetUsername } = req.body;
+  if (!targetUsername) return res.status(400).json({ message: 'Target username is required' });
+  try {
+    await db.declineFollowRequest(targetUsername, req.user.username);
+    res.json({ message: 'Follow request declined' });
+  } catch (err) {
+    console.error('Decline follow error:', err);
     res.status(500).json({ message: 'Internal server error' });
   }
 });
@@ -734,11 +1337,795 @@ app.get('/api/followers/mutual-online', authenticateToken, async (req, res) => {
 });
 
 
+// REST: Assign Anonymous Sequential ID
+app.post('/api/anonymous/assign', async (req, res) => {
+  const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+  const { fingerprint } = req.body;
+
+  // Check if IP is banned
+  const ipBanned = await db.isIpBanned(ip);
+  if (ipBanned) {
+    const until = ipBanned.expires_at ? new Date(ipBanned.expires_at).toLocaleDateString() : 'indefinitely';
+    return res.status(403).json({ message: `Access denied. Your network is banned until ${until}.`, banned: true });
+  }
+
+  // Check if fingerprint is banned
+  if (fingerprint) {
+    const fpBanned = await db.isFingerprintBanned(fingerprint);
+    if (fpBanned) {
+      const until = fpBanned.expires_at ? new Date(fpBanned.expires_at).toLocaleDateString() : 'indefinitely';
+      return res.status(403).json({ message: `Access denied. Your device is banned until ${until}.`, banned: true });
+    }
+  }
+
+  try {
+    const num = await db.getNextAnonId();
+    const anonId = String(num).padStart(6, '0');
+    const anonUsername = `Anonymous_${anonId}`;
+    const token = jwt.sign({ username: anonUsername, isAnonymous: true, anonNum: num }, JWT_SECRET, { expiresIn: '24h' });
+    res.json({ username: anonUsername, displayName: `Anonymous #${anonId}`, token });
+  } catch (err) {
+    console.error('Anon assign error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Release Anonymous Sequential ID
+app.all('/api/anonymous/release', (req, res) => {
+  res.json({ message: 'Anonymous ID released' });
+});
+
+// REST: Check IP ban status
+app.get('/api/bans/check', async (req, res) => {
+  const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+  const { fingerprint } = req.query;
+  const ipBanned = await db.isIpBanned(ip);
+  if (ipBanned) return res.json({ banned: true, reason: ipBanned.reason, expires_at: ipBanned.expires_at });
+  if (fingerprint) {
+    const fpBanned = await db.isFingerprintBanned(fingerprint);
+    if (fpBanned) return res.json({ banned: true, reason: fpBanned.reason, expires_at: fpBanned.expires_at });
+  }
+  return res.json({ banned: false });
+});
+
+// REST: Profile sync broadcast (called after profile update)
+app.post('/api/profile/sync', authenticateToken, async (req, res) => {
+  const { nickname, bio, profile_img } = req.body;
+  const username = req.user.username;
+  // Broadcast to all sockets of this user
+  const socketId = onlineUsers.get(username);
+  if (socketId) {
+    io.to(socketId).emit('profile_updated', { username, nickname, bio, profile_img });
+  }
+  // Also broadcast to all users who follow them (so their peer profile cards update)
+  try {
+    const followers = await db.getFollowers(username);
+    followers.forEach(follower => {
+      const followerSocketId = onlineUsers.get(follower.username);
+      if (followerSocketId) {
+        io.to(followerSocketId).emit('peer_profile_updated', { username, nickname, bio, profile_img });
+      }
+    });
+  } catch { /* ignore */ }
+  res.json({ message: 'Profile sync broadcast sent' });
+});
+
 // Map of online registered usernames -> socketId
 const onlineUsers = new Map();
 
 // Map of roomId -> socketId for private matches
 const privateRooms = new Map();
+
+// Admin socket namespace
+const adminIo = io.of('/admin');
+
+// Middleware: Authenticate Admin Socket connection
+adminIo.use((socket, next) => {
+  const token = socket.handshake.auth?.token;
+  if (!token) {
+    return next(new Error('Authentication error: Token required'));
+  }
+  jwt.verify(token, JWT_SECRET, async (err, decoded) => {
+    if (err) return next(new Error('Authentication error: Invalid token'));
+    const admin = await db.getAdminById(decoded.adminId);
+    if (!admin || !admin.is_active) {
+      return next(new Error('Authentication error: Admin account deactivated or missing'));
+    }
+    socket.admin = admin;
+    next();
+  });
+});
+
+adminIo.on('connection', (socket) => {
+  console.log(`🔑 Admin socket connected: ${socket.id} (User: ${socket.admin.username}, Role: ${socket.admin.role})`);
+  
+  socket.on('disconnect', () => {
+    console.log(`🔒 Admin socket disconnected: ${socket.id}`);
+  });
+});
+
+function emitToAdmins(event, payload) {
+  adminIo.emit(event, payload);
+}
+
+// --- ADMIN PANEL API CONFIGURATIONS & ENDPOINTS ---
+
+function getCookie(req, name) {
+  const cookieHeader = req.headers.cookie;
+  if (!cookieHeader) return null;
+  const cookies = cookieHeader.split(';').reduce((acc, c) => {
+    const [key, ...val] = c.trim().split('=');
+    acc[key] = val.join('=');
+    return acc;
+  }, {});
+  return cookies[name] || null;
+}
+
+function setAdminCookies(res, accessToken, refreshToken) {
+  res.cookie('admin_access_token', accessToken, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict',
+    maxAge: 15 * 60 * 1000 // 15 mins
+  });
+  res.cookie('admin_refresh_token', refreshToken, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict',
+    maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+  });
+}
+
+function clearAdminCookies(res) {
+  res.clearCookie('admin_access_token');
+  res.clearCookie('admin_refresh_token');
+}
+
+// Middleware: Authenticate Admin Access
+function authenticateAdminToken(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  let token = authHeader && authHeader.split(' ')[1];
+  if (!token) {
+    token = getCookie(req, 'admin_access_token');
+  }
+
+  if (!token) return res.status(401).json({ message: 'Admin access token required' });
+
+  jwt.verify(token, JWT_SECRET, async (err, decoded) => {
+    if (err) return res.status(403).json({ message: 'Invalid or expired admin token' });
+    
+    // Verify session in DB/JSON
+    const session = await db.getAdminSession(token);
+    if (!session || !session.is_active) {
+      return res.status(403).json({ message: 'Admin session terminated or inactive' });
+    }
+
+    const admin = await db.getAdminById(decoded.adminId);
+    if (!admin || !admin.is_active) {
+      return res.status(403).json({ message: 'Admin account deactivated or missing' });
+    }
+
+    req.admin = admin;
+    req.adminToken = token;
+    next();
+  });
+}
+
+// Middleware: Restrict by role claims
+function requireAdminRole(allowedRoles) {
+  return (req, res, next) => {
+    if (!req.admin) return res.status(401).json({ message: 'Admin auth required' });
+    if (!allowedRoles.includes(req.admin.role)) {
+      return res.status(403).json({ message: 'Permission denied: Insufficient role permissions' });
+    }
+    next();
+  };
+}
+
+// REST: Admin Login
+app.post('/api/admin/auth/login', async (req, res) => {
+  const { username, password, deviceFingerprint } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ message: 'Username and password are required' });
+  }
+
+  try {
+    const admin = await db.getAdminByUsername(username);
+    if (!admin || !admin.is_active) {
+      return res.status(400).json({ message: 'Invalid credentials or inactive account' });
+    }
+
+    // Check Lockout
+    if (admin.locked_until && new Date(admin.locked_until) > new Date()) {
+      return res.status(403).json({ message: 'Account is locked. Please try again later.' });
+    }
+
+    const match = await bcrypt.compare(password, admin.password_hash);
+    if (!match) {
+      const attempts = (admin.login_attempts || 0) + 1;
+      const updates = { login_attempts: attempts };
+      if (attempts >= 10) {
+        updates.locked_until = new Date(Date.now() + 15 * 60 * 1000); // lock 15 mins
+      }
+      await db.updateAdminUser(admin.id, updates);
+      return res.status(400).json({ message: 'Invalid credentials' });
+    }
+
+    // Reset login attempts
+    await db.updateAdminUser(admin.id, { login_attempts: 0, locked_until: null });
+
+    // If 2FA is enabled, require code challenge
+    if (admin.twofa_enabled) {
+      const tempToken = jwt.sign({ adminId: admin.id, pending2FA: true }, JWT_SECRET, { expiresIn: '5m' });
+      return res.json({ requires2FA: true, tempToken, adminId: admin.id });
+    }
+
+    // Otherwise proceed (forces 2FA setup on client side)
+    const accessToken = jwt.sign({ adminId: admin.id, username: admin.username, role: admin.role }, JWT_SECRET, { expiresIn: '15m' });
+    const refreshToken = jwt.sign({ adminId: admin.id }, JWT_SECRET, { expiresIn: '7d' });
+
+    // Save session
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.createAdminSession(admin.id, accessToken, refreshToken, new Date(Date.now() + 15 * 60 * 1000), ip, ua, deviceFingerprint || 'unknown');
+    
+    // Log login
+    await db.writeAuditLog(admin.id, admin.username, admin.role, ip, ua, deviceFingerprint || 'unknown', 'LOGIN', 'admin_users', admin.id, null, null);
+
+    setAdminCookies(res, accessToken, refreshToken);
+    res.json({
+      requires2FA: false,
+      setup2FA: true,
+      token: accessToken,
+      admin: { id: admin.id, username: admin.username, role: admin.role, password_changed: admin.password_changed }
+    });
+  } catch (err) {
+    console.error('Admin login error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Verify TOTP Code
+app.post('/api/admin/auth/2fa/verify', async (req, res) => {
+  const { code, tempToken, adminId, setupSecret } = req.body;
+  if (!code) return res.status(400).json({ message: 'Verification code is required' });
+
+  try {
+    let resolvedAdminId = adminId;
+    if (tempToken) {
+      try {
+        const decoded = jwt.verify(tempToken, JWT_SECRET);
+        resolvedAdminId = decoded.adminId;
+      } catch {
+        return res.status(400).json({ message: 'Invalid or expired login session' });
+      }
+    }
+
+    if (!resolvedAdminId) return res.status(400).json({ message: 'Admin ID required' });
+
+    const admin = await db.getAdminById(resolvedAdminId);
+    if (!admin) return res.status(400).json({ message: 'Administrator not found' });
+
+    const secret = setupSecret || admin.twofa_secret;
+    if (!secret) return res.status(400).json({ message: 'No 2FA secret set up yet' });
+
+    const verified = verifyTOTP(secret, code);
+    if (!verified) {
+      return res.status(400).json({ message: 'Invalid authenticator code' });
+    }
+
+    // If this is setup enrollment
+    if (setupSecret) {
+      await db.updateAdmin2FA(admin.id, setupSecret, true);
+      const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+      const ua = req.headers['user-agent'] || 'unknown';
+      await db.writeAuditLog(admin.id, admin.username, admin.role, ip, ua, 'unknown', '2FA_SETUP', 'admin_users', admin.id, null, null);
+      return res.json({ message: '2FA setup verified successfully!' });
+    }
+
+    // Complete login session
+    const accessToken = jwt.sign({ adminId: admin.id, username: admin.username, role: admin.role }, JWT_SECRET, { expiresIn: '15m' });
+    const refreshToken = jwt.sign({ adminId: admin.id }, JWT_SECRET, { expiresIn: '7d' });
+
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.createAdminSession(admin.id, accessToken, refreshToken, new Date(Date.now() + 15 * 60 * 1000), ip, ua, 'unknown');
+    
+    // Log login
+    await db.writeAuditLog(admin.id, admin.username, admin.role, ip, ua, 'unknown', 'LOGIN_2FA', 'admin_users', admin.id, null, null);
+
+    setAdminCookies(res, accessToken, refreshToken);
+    res.json({
+      token: accessToken,
+      admin: { id: admin.id, username: admin.username, role: admin.role, password_changed: admin.password_changed }
+    });
+  } catch (err) {
+    console.error('2FA verification failure:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Initiate 2FA Setup secret
+app.post('/api/admin/auth/2fa/setup', authenticateAdminToken, async (req, res) => {
+  const crypto = require('crypto');
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let secret = '';
+  for (let i = 0; i < 16; i++) {
+    secret += alphabet[crypto.randomInt(0, alphabet.length)];
+  }
+
+  const qrUri = `otpauth://totp/GhostChat:${req.admin.username}?secret=${secret}&issuer=GhostChat`;
+  res.json({ secret, qrUri });
+});
+
+// REST: Refresh admin session
+app.post('/api/admin/auth/refresh', async (req, res) => {
+  let token = getCookie(req, 'admin_refresh_token');
+  if (!token) return res.status(401).json({ message: 'Refresh token required' });
+
+  jwt.verify(token, JWT_SECRET, async (err, decoded) => {
+    if (err) return res.status(403).json({ message: 'Invalid refresh token' });
+    const admin = await db.getAdminById(decoded.adminId);
+    if (!admin || !admin.is_active) return res.status(403).json({ message: 'Admin inactive' });
+
+    const accessToken = jwt.sign({ adminId: admin.id, username: admin.username, role: admin.role }, JWT_SECRET, { expiresIn: '15m' });
+    const refreshToken = jwt.sign({ adminId: admin.id }, JWT_SECRET, { expiresIn: '7d' });
+
+    setAdminCookies(res, accessToken, refreshToken);
+    res.json({ token: accessToken });
+  });
+});
+
+// REST: Admin Logout
+app.post('/api/admin/auth/logout', authenticateAdminToken, async (req, res) => {
+  try {
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.deactivateAdminSession(req.adminToken);
+    await db.writeAuditLog(req.admin.id, req.admin.username, req.admin.role, ip, ua, 'unknown', 'LOGOUT', 'admin_users', req.admin.id, null, null);
+    clearAdminCookies(res);
+    res.json({ message: 'Logged out successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Current admin user profile
+app.get('/api/admin/auth/me', authenticateAdminToken, (req, res) => {
+  res.json({
+    id: req.admin.id,
+    username: req.admin.username,
+    role: req.admin.role,
+    password_changed: req.admin.password_changed,
+    twofa_enabled: req.admin.twofa_enabled
+  });
+});
+
+// REST: Super Admin users management CRUD
+app.get('/api/admin/users', authenticateAdminToken, requireAdminRole(['super_admin']), async (req, res) => {
+  try {
+    const list = await db.getAdminUsers();
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+app.post('/api/admin/users', authenticateAdminToken, requireAdminRole(['super_admin']), async (req, res) => {
+  const { username, email, password, role } = req.body;
+  if (!username || !email || !password || !role) {
+    return res.status(400).json({ message: 'All fields are required' });
+  }
+
+  try {
+    const hash = await bcrypt.hash(password, 10);
+    const newAdmin = await db.createAdminUser(username, email, hash, role);
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.writeAuditLog(req.admin.id, req.admin.username, req.admin.role, ip, ua, 'unknown', 'CREATE_ADMIN', 'admin_users', newAdmin.id, null, { username, role });
+    res.status(201).json({ message: 'Admin user created successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+app.put('/api/admin/users/:id', authenticateAdminToken, requireAdminRole(['super_admin']), async (req, res) => {
+  const { id } = req.params;
+  const { role, is_active, password } = req.body;
+  try {
+    const updates = {};
+    if (role) updates.role = role;
+    if (is_active !== undefined) updates.is_active = is_active;
+    if (password) {
+      updates.password_hash = await bcrypt.hash(password, 10);
+      updates.password_changed = false; // force change
+    }
+
+    const previous = await db.getAdminById(id);
+    const updated = await db.updateAdminUser(id, updates);
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.writeAuditLog(req.admin.id, req.admin.username, req.admin.role, ip, ua, 'unknown', 'UPDATE_ADMIN', 'admin_users', id, previous, updated);
+    res.json({ message: 'Admin updated successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+app.delete('/api/admin/users/:id', authenticateAdminToken, requireAdminRole(['super_admin']), async (req, res) => {
+  const { id } = req.params;
+  try {
+    const previous = await db.getAdminById(id);
+    await db.deleteAdminUser(id);
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.writeAuditLog(req.admin.id, req.admin.username, req.admin.role, ip, ua, 'unknown', 'DELETE_ADMIN', 'admin_users', id, previous, null);
+    res.json({ message: 'Admin deleted successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Change Password (forced or manual)
+app.post('/api/admin/auth/change-password', authenticateAdminToken, async (req, res) => {
+  const { newPassword } = req.body;
+  if (!newPassword || newPassword.length < 20) {
+    return res.status(400).json({ message: 'Password must be at least 20 characters long.' });
+  }
+
+  try {
+    const hash = await bcrypt.hash(newPassword, 10);
+    await db.updateAdminUser(req.admin.id, { password_hash: hash, password_changed: true });
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.writeAuditLog(req.admin.id, req.admin.username, req.admin.role, ip, ua, 'unknown', 'CHANGE_PASSWORD', 'admin_users', req.admin.id, null, null);
+    res.json({ message: 'Password changed successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: List platform users with filters
+app.get('/api/admin/platform/users', authenticateAdminToken, requireAdminRole(['super_admin', 'platform_admin', 'moderator']), async (req, res) => {
+  const { search, status, offset, limit } = req.query;
+  try {
+    const list = await db.getPlatformUsersFiltered(search, status, null, parseInt(offset || '0'), parseInt(limit || '50'));
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Suspend Platform User
+app.post('/api/admin/platform/users/:id/suspend', authenticateAdminToken, requireAdminRole(['super_admin', 'platform_admin', 'moderator']), async (req, res) => {
+  const { id } = req.params; // username
+  const { durationDays, reason } = req.body;
+
+  try {
+    const user = await db.getUserByUsername(id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    const expires = new Date();
+    expires.setDate(expires.getDate() + parseInt(durationDays || '20'));
+
+    await db.setUserSuspension(id, expires);
+
+    // Disconnect user socket if online
+    const socketId = onlineUsers.get(id);
+    if (socketId) {
+      io.to(socketId).emit('account_action', { type: 'suspended', until: expires.toISOString(), message: `Your account is suspended for repeated abuse: ${reason}.` });
+      const sock = io.sockets.sockets.get(socketId);
+      if (sock) sock.disconnect(true);
+    }
+
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.writeAuditLog(req.admin.id, req.admin.username, req.admin.role, ip, ua, 'unknown', 'USER_SUSPEND', 'users', id, null, { expires, reason });
+
+    emitToAdmins('ban:applied', { username: id, reason, duration: `${durationDays || 20} days` });
+
+    res.json({ message: 'User suspended successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Ban platform user
+app.post('/api/admin/platform/users/:id/ban', authenticateAdminToken, requireAdminRole(['super_admin', 'platform_admin', 'moderator']), async (req, res) => {
+  const { id } = req.params; // username
+  const { reason } = req.body;
+
+  try {
+    const user = await db.getUserByUsername(id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    await db.createBan(id, reason, null);
+
+    // Disconnect user socket if online
+    const socketId = onlineUsers.get(id);
+    if (socketId) {
+      io.to(socketId).emit('account_action', { type: 'permanent_ban', message: `Your account is permanently banned: ${reason}.` });
+      const sock = io.sockets.sockets.get(socketId);
+      if (sock) sock.disconnect(true);
+    }
+
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.writeAuditLog(req.admin.id, req.admin.username, req.admin.role, ip, ua, 'unknown', 'USER_BAN', 'users', id, null, { reason });
+
+    emitToAdmins('ban:applied', { username: id, reason });
+
+    res.json({ message: 'User banned successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Unban platform user
+app.post('/api/admin/platform/users/:id/unban', authenticateAdminToken, requireAdminRole(['super_admin', 'platform_admin', 'moderator']), async (req, res) => {
+  const { id } = req.params; // username
+  try {
+    await db.deleteBan(id);
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.writeAuditLog(req.admin.id, req.admin.username, req.admin.role, ip, ua, 'unknown', 'USER_UNBAN', 'users', id, null, null);
+
+    emitToAdmins('ban:lifted', { username: id });
+
+    res.json({ message: 'User unbanned successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Unsuspend platform user
+app.post('/api/admin/platform/users/:id/unsuspend', authenticateAdminToken, requireAdminRole(['super_admin', 'platform_admin', 'moderator']), async (req, res) => {
+  const { id } = req.params; // username
+  try {
+    await db.unsuspendUser(id);
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.writeAuditLog(req.admin.id, req.admin.username, req.admin.role, ip, ua, 'unknown', 'USER_UNSUSPEND', 'users', id, null, null);
+
+    emitToAdmins('ban:lifted', { username: id });
+
+    res.json({ message: 'User unsuspended successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Delete Platform User permanently
+app.delete('/api/admin/platform/users/:id', authenticateAdminToken, requireAdminRole(['super_admin', 'platform_admin']), async (req, res) => {
+  const { id } = req.params; // username
+  try {
+    const user = await db.getUserByUsername(id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    // Disconnect user if online
+    const socketId = onlineUsers.get(id);
+    if (socketId) {
+      io.to(socketId).emit('account_action', { type: 'permanent_ban', message: 'Your account has been deleted permanently.' });
+      const sock = io.sockets.sockets.get(socketId);
+      if (sock) sock.disconnect(true);
+    }
+
+    await db.executeUserDeletion(id);
+
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.writeAuditLog(req.admin.id, req.admin.username, req.admin.role, ip, ua, 'unknown', 'USER_DELETE', 'users', id, null, null);
+
+    emitToAdmins('deletion:executed', { username: id });
+
+    res.json({ message: 'User deleted permanently' });
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Force Logout User
+app.post('/api/admin/platform/users/:id/force-logout', authenticateAdminToken, requireAdminRole(['super_admin', 'platform_admin', 'moderator']), async (req, res) => {
+  const { id } = req.params; // username
+  try {
+    const socketId = onlineUsers.get(id);
+    if (socketId) {
+      io.to(socketId).emit('account_action', { type: 'force_logout', message: 'An administrator forced your session to terminate.' });
+      const sock = io.sockets.sockets.get(socketId);
+      if (sock) sock.disconnect(true);
+    }
+
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.writeAuditLog(req.admin.id, req.admin.username, req.admin.role, ip, ua, 'unknown', 'USER_FORCE_LOGOUT', 'users', id, null, null);
+
+    res.json({ message: 'User force-logged out' });
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Send Warning Message
+app.post('/api/admin/platform/users/:id/warn', authenticateAdminToken, requireAdminRole(['super_admin', 'platform_admin', 'moderator']), async (req, res) => {
+  const { id } = req.params; // username
+  const { message } = req.body;
+
+  try {
+    const notif = await db.createNotification(id, 'system', 'report_warning', `Warning: Admin message: ${message}`);
+    const socketId = onlineUsers.get(id);
+    if (socketId) {
+      io.to(socketId).emit('new_notification', notif);
+    }
+
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.writeAuditLog(req.admin.id, req.admin.username, req.admin.role, ip, ua, 'unknown', 'USER_WARN', 'users', id, null, { message });
+
+    res.json({ message: 'Warning sent successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Send System Notification
+app.post('/api/admin/platform/users/:id/notify', authenticateAdminToken, requireAdminRole(['super_admin', 'platform_admin', 'moderator']), async (req, res) => {
+  const { id } = req.params; // username
+  const { message } = req.body;
+
+  try {
+    const notif = await db.createNotification(id, 'system', 'system_alert', message);
+    const socketId = onlineUsers.get(id);
+    if (socketId) {
+      io.to(socketId).emit('new_notification', notif);
+    }
+
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.writeAuditLog(req.admin.id, req.admin.username, req.admin.role, ip, ua, 'unknown', 'USER_NOTIFY', 'users', id, null, { message });
+
+    res.json({ message: 'Notification sent successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: List Reports
+app.get('/api/admin/reports', authenticateAdminToken, requireAdminRole(['super_admin', 'platform_admin', 'moderator']), async (req, res) => {
+  try {
+    const list = await db.getReportsWithDetails();
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Resolve Report
+app.put('/api/admin/reports/:id/resolve', authenticateAdminToken, requireAdminRole(['super_admin', 'platform_admin', 'moderator']), async (req, res) => {
+  const { id } = req.params;
+  try {
+    // mark resolved
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.writeAuditLog(req.admin.id, req.admin.username, req.admin.role, ip, ua, 'unknown', 'REPORT_RESOLVE', 'reports', id, null, null);
+    res.json({ message: 'Report resolved' });
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Contacts
+app.get('/api/admin/contacts', authenticateAdminToken, requireAdminRole(['super_admin', 'platform_admin', 'support_admin']), async (req, res) => {
+  try {
+    const list = await db.getContactInquiries();
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+app.get('/api/admin/contacts/:id', authenticateAdminToken, requireAdminRole(['super_admin', 'platform_admin', 'support_admin']), async (req, res) => {
+  const { id } = req.params;
+  try {
+    const details = await db.getContactInquiryById(id);
+    res.json(details);
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+app.post('/api/admin/contacts/:id/reply', authenticateAdminToken, requireAdminRole(['super_admin', 'platform_admin', 'support_admin']), async (req, res) => {
+  const { id } = req.params;
+  const { reply } = req.body;
+
+  try {
+    await db.createContactReply(id, req.admin.id, reply);
+    await db.updateContactInquiryStatus(id, 'resolved', req.admin.id);
+
+    // If inquirer user is online, emit WS update
+    const inquiry = await db.getContactInquiryById(id);
+    if (inquiry && inquiry.username) {
+      const userSocketId = onlineUsers.get(inquiry.username);
+      if (userSocketId) {
+        io.to(userSocketId).emit('contact_reply', { inquiryId: id, reply });
+      }
+    }
+
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.writeAuditLog(req.admin.id, req.admin.username, req.admin.role, ip, ua, 'unknown', 'CONTACT_REPLY', 'contact_inquiries', id, null, { reply });
+
+    emitToAdmins('contact:replied', { inquiryId: id, reply });
+
+    res.json({ message: 'Reply sent and inquiry marked resolved' });
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Deletion Requests list
+app.get('/api/admin/deletion-requests', authenticateAdminToken, requireAdminRole(['super_admin', 'platform_admin', 'support_admin']), async (req, res) => {
+  try {
+    const list = await db.getDeletionRequests();
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+app.post('/api/admin/deletion-requests/:id/execute', authenticateAdminToken, requireAdminRole(['super_admin', 'platform_admin']), async (req, res) => {
+  const { id } = req.params;
+  const { username } = req.body;
+
+  try {
+    await db.executeUserDeletion(username);
+    await db.resolveDeletionRequest(id, 'deleted', req.admin.id);
+
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '127.0.0.1').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || 'unknown';
+    await db.writeAuditLog(req.admin.id, req.admin.username, req.admin.role, ip, ua, 'unknown', 'DELETION_EXECUTE', 'deletion_requests', id, null, { username });
+
+    emitToAdmins('deletion:executed', { username });
+
+    res.json({ message: 'User data purged successfully!' });
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Metrics analytics
+app.get('/api/admin/analytics/metrics', authenticateAdminToken, async (req, res) => {
+  try {
+    const metrics = await db.getAdminMetrics();
+    // Add real-time online count
+    metrics.onlineCount = totalOnline;
+    res.json(metrics);
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Audit trail log search
+app.get('/api/admin/audit', authenticateAdminToken, requireAdminRole(['super_admin']), async (req, res) => {
+  try {
+    const list = await db.getAuditLogs();
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// REST: Server Health status
+app.get('/api/admin/health', authenticateAdminToken, (req, res) => {
+  const os = require('os');
+  res.json({
+    status: 'healthy',
+    cpuUsage: os.loadavg()[0] * 100 / os.cpus().length,
+    freeMemPercent: os.freemem() * 100 / os.totalmem(),
+    uptime: os.uptime(),
+    dbStatus: 'connected',
+    onlineSockets: totalOnline
+  });
+});
 
 // Map of socketId → User state
 const users = new Map();
@@ -807,8 +2194,8 @@ function pairUsers(socketIdA, socketIdB) {
   userB.partner = socketIdA;
 
   // A is initiator (makes offer)
-  userA.socket.emit('matched', { initiator: true, partnerId: socketIdB });
-  userB.socket.emit('matched', { initiator: false, partnerId: socketIdA });
+  userA.socket.emit('matched', { initiator: true, partnerId: socketIdB, partnerUsername: userB.username });
+  userB.socket.emit('matched', { initiator: false, partnerId: socketIdA, partnerUsername: userA.username });
 
   console.log(`✅ Paired: ${userA.username || socketIdA} ↔ ${userB.username || socketIdB}`);
 }
@@ -847,21 +2234,42 @@ io.use((socket, next) => {
 });
 
 io.on('connection', async (socket) => {
-  const ip = socket.handshake.address || socket.conn.remoteAddress || '127.0.0.1';
-
   // Check IP Ban
-  const banned = await db.isBanned(ip);
-  if (banned) {
-    socket.emit('chat_message', { text: `🔴 Access Denied: You are permanently banned. Reason: ${banned.reason}`, from: 'system' });
-    console.log(`🚫 Banned connection rejected: ${ip}`);
+  const rawIp = socket.handshake.address || socket.conn.remoteAddress || '127.0.0.1';
+  const ip = rawIp.replace('::ffff:', '');
+
+  const ipBanned = await db.isIpBanned(ip);
+  if (ipBanned) {
+    socket.emit('account_action', { type: 'ip_banned', message: `Your network has been temporarily banned. Reason: ${ipBanned.reason}` });
     socket.disconnect(true);
     return;
+  }
+
+  // Check username ban / suspension
+  if (socket.user && !socket.user.isAnonymous) {
+    const userBan = await db.isBanned(socket.user.username);
+    if (userBan) {
+      socket.emit('account_action', { type: 'permanent_ban', message: `Your account has been permanently banned. Reason: ${userBan.reason}` });
+      socket.disconnect(true);
+      return;
+    }
+    const suspended = await db.isUserSuspended(socket.user.username);
+    if (suspended) {
+      const until = new Date(suspended.suspended_until).toLocaleDateString();
+      socket.emit('account_action', { type: 'suspended', until: suspended.suspended_until, message: `Your account is suspended until ${until}.` });
+      socket.disconnect(true);
+      return;
+    }
   }
 
   totalOnline++;
   broadcastOnlineCount();
 
   const connUsername = socket.user?.username || 'Guest_' + Math.floor(1000 + Math.random() * 9000);
+
+  // Emit to admin panel
+  emitToAdmins('user:online', { username: connUsername, status: 'online' });
+  emitToAdmins('metrics:update', { onlineCount: totalOnline });
 
   if (socket.user && !socket.user.isAnonymous) {
     onlineUsers.set(socket.user.username, socket.id);
@@ -972,6 +2380,8 @@ io.on('connection', async (socket) => {
       io.to(targetSocketId).emit('follow_accepted_incoming', { accepterUsername: accepter });
       io.to(targetSocketId).emit('follow_update');
     }
+    // Also emit follow_back_prompt to the accepter
+    io.to(socket.id).emit('follow_back_prompt', { targetUsername });
   });
 
   // Direct calls
@@ -1104,8 +2514,15 @@ io.on('connection', async (socket) => {
 
   // Disconnection
   socket.on('disconnect', () => {
+    const userVal = users.get(socket.id);
+    const connUsername = userVal ? userVal.username : 'Unknown';
     totalOnline--;
     broadcastOnlineCount();
+
+    // Emit to admin panel
+    emitToAdmins('user:online', { username: connUsername, status: 'offline' });
+    emitToAdmins('metrics:update', { onlineCount: totalOnline });
+
     disconnectFromPartner(socket.id);
     removeFromQueue(socket.id);
     users.delete(socket.id);
@@ -1122,6 +2539,11 @@ io.on('connection', async (socket) => {
     
     console.log(`🔴 Disconnected: ${socket.id} | Total: ${totalOnline}`);
   });
+});
+
+// Root route - quick alive check
+app.get('/', (req, res) => {
+  res.json({ service: 'GhostChat Signaling Server', status: 'online', version: '2.0.0' });
 });
 
 // Health metrics
@@ -1150,7 +2572,24 @@ app.get('/health', async (req, res) => {
 // Run Init Db, then start Server
 const PORT = process.env.PORT || 4000;
 initDb().then(() => {
-  server.listen(PORT, () => {
+  server.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Signaling server running on port ${PORT}`);
+
+    // Keep-alive self-ping: prevents Render free-tier from sleeping (14 min interval)
+    if (process.env.NODE_ENV === 'production') {
+      const SELF_URL = process.env.RENDER_EXTERNAL_URL || `https://strangerlink-backend.onrender.com`;
+      setInterval(async () => {
+        try {
+          const https = require('https');
+          https.get(`${SELF_URL}/health`, (res) => {
+            console.log(`💓 Keep-alive ping: ${res.statusCode}`);
+          }).on('error', (e) => {
+            console.warn(`Keep-alive ping failed: ${e.message}`);
+          });
+        } catch (e) {
+          console.warn('Keep-alive error:', e.message);
+        }
+      }, 14 * 60 * 1000); // every 14 minutes
+    }
   });
 });

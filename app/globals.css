@@ -24,15 +24,15 @@ body {
 /* Glassmorphism helpers */
 .glass {
   background: rgba(255, 255, 255, 0.75);
-  backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
   border: 1px solid rgba(0, 0, 0, 0.06);
 }
 
 .glass-dark {
   background: rgba(15, 15, 15, 0.7);
-  backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
@@ -71,4 +71,26 @@ body {
 
 .animate-pulse-soft {
   animation: pulse-soft 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Custom premium styling */
+.btn-glow:hover {
+  box-shadow: 0 0 15px rgba(0, 0, 0, 0.15);
+}
+
+.dark-btn-glow:hover {
+  box-shadow: 0 0 15px rgba(255, 255, 255, 0.25);
+}
+
+.animate-spin-slow {
+  animation: spin-slow 8s linear infinite;
+}
+
+@keyframes spin-slow {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }

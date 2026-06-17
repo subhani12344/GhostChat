@@ -1,11 +1,24 @@
+databases:
+  - name: ghostchat-db
+    plan: free
+    databaseName: ghostchat
+    user: ghostchat
+
 services:
   - type: web
-    name: strangerlink-backend
+    name: ghostchat-backend
     env: node
     rootDir: backend
     buildCommand: npm install
-    startCommand: npm start
+    startCommand: node server.js
+    healthCheckPath: /health
     envVars:
-      - key: PORT
-        value: 4000
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ghostchat-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: NODE_ENV
+        value: production
     plan: free

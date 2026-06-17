@@ -7,7 +7,7 @@ import VideoRoom from '@/components/VideoRoom';
 function ChatRoomContent() {
   const searchParams = useSearchParams();
   const mode = (searchParams.get('mode') || 'video') as 'video' | 'text';
-  const serverUrl = process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:4000';
+  const serverUrl = (typeof window !== "undefined" && (window as any).GHOSTCHAT_SERVER_URL) || process.env.NEXT_PUBLIC_SERVER_URL || "https://ghostchat-backend.onrender.com";
 
   return (
     <div className="w-full bg-brand-gray-light">

@@ -5,7 +5,6 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
-import AuthModal from '@/components/AuthModal';
 import TermsModal from '@/components/TermsModal';
 import CookieBanner from '@/components/CookieBanner';
 import { Shield, Sparkles, MessageSquare, Globe, Smartphone, Zap } from 'lucide-react';
@@ -17,7 +16,7 @@ export default function Home() {
   const [authOpen, setAuthOpen] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
   const [pendingRedirect, setPendingRedirect] = useState<string | null>(null);
-  const serverUrl = process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:4000';
+  const serverUrl = (typeof window !== "undefined" && (window as any).GHOSTCHAT_SERVER_URL) || process.env.NEXT_PUBLIC_SERVER_URL || "https://ghostchat-backend.onrender.com";
 
   useEffect(() => {
     // Check if terms accepted
@@ -45,7 +44,7 @@ export default function Home() {
     };
 
     fetchOnlineCount();
-    const intervalId = setInterval(fetchOnlineCount, 2000);
+    const intervalId = setInterval(fetchOnlineCount, 1000);
 
     return () => clearInterval(intervalId);
   }, [serverUrl]);
@@ -54,8 +53,7 @@ export default function Home() {
     if (user) {
       router.push(targetPath);
     } else {
-      setPendingRedirect(targetPath);
-      setAuthOpen(true);
+      router.push(`/login?redirect=${encodeURIComponent(targetPath)}`);
     }
   };
 
@@ -200,19 +198,6 @@ export default function Home() {
       <Footer />
 
       <CookieBanner />
-
-      <AuthModal
-        isOpen={authOpen}
-        onClose={() => setAuthOpen(false)}
-        onAuthSuccess={(u) => {
-          setUser(u);
-          if (pendingRedirect) {
-            router.push(pendingRedirect);
-            setPendingRedirect(null);
-          }
-        }}
-        serverUrl={serverUrl}
-      />
 
       <TermsModal
         isOpen={showTerms}
