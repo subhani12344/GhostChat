@@ -149,13 +149,17 @@ async function initDb() {
   if (dbUrl || pgHost) {
     try {
       console.log('🔌 Connecting to PostgreSQL...');
-      pool = new Pool(dbUrl ? { connectionString: dbUrl } : {
+      pool = new Pool(dbUrl ? { 
+        connectionString: dbUrl,
+        connectionTimeoutMillis: 5000
+      } : {
         host: process.env.PGHOST,
         user: process.env.PGUSER,
         password: process.env.PGPASSWORD,
         database: process.env.PGDATABASE,
         port: parseInt(process.env.PGPORT || '5432', 10),
-        ssl: { rejectUnauthorized: false }
+        ssl: { rejectUnauthorized: false },
+        connectionTimeoutMillis: 5000
       });
 
       // Quick query to test connection
