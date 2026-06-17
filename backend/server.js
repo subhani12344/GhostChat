@@ -1523,6 +1523,7 @@ function requireAdminRole(allowedRoles) {
 }
 
 // REST: Admin Login
+console.log("🔥 ADMIN LOGIN ROUTE LOADED");
 app.post('/api/admin/auth/login', async (req, res) => {
   const { username, password, deviceFingerprint } = req.body;
   if (!username || !password) {
