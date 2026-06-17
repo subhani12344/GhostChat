@@ -2577,7 +2577,7 @@ initDb().then(() => {
 
     // Keep-alive self-ping: prevents Render free-tier from sleeping (14 min interval)
     if (process.env.NODE_ENV === 'production') {
-      const SELF_URL = process.env.RENDER_EXTERNAL_URL || `https://ghostchat-backend.onrender.com`;
+      const SELF_URL = process.env.RENDER_EXTERNAL_URL || `https://strangerlink-backend.onrender.com`;
       setInterval(async () => {
         try {
           const https = require('https');
